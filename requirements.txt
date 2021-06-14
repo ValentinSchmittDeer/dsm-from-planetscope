@@ -5,3 +5,10 @@ scikit-image
 scikit-learn
 numpy
 scipy
+pytest
+pytest-cov
+flake8
+flake8-isort
+isort
+black
+autoflake
