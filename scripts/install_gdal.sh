@@ -27,7 +27,7 @@ else
     # following the useful hints on https://gist.github.com/cspanring/5680334 here,
     # "Installing GDAL in a Python virtual environment",
     # in any case this needs be done after numpy installation to have also gdal_array initialized correctly
-    pip install gdal==$(gdal-config --version) --global-option=build_ext --global-option="-I/usr/include/gdal"
+    # pip install gdal==$(gdal-config --version) --global-option=build_ext --global-option="-I/usr/include/gdal"
 fi
 
 
