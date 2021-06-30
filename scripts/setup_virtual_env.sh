@@ -11,8 +11,8 @@ exists()
 
 
 if exists pyenv; then
-    pyenv install 3.8.8 --skip-existing
-    pyenv virtualenv 3.8.8 dsm  # this will skip automatically if exists already
+    pyenv install 3.5.2 --skip-existing
+    pyenv virtualenv 3.5.2 dsm  # this will skip automatically if exists already
     pyenv local dsm  # activate env
 else
     echo "It is strongly recommended to install pyenv for managing virtual environments."

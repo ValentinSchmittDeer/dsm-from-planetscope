@@ -4,9 +4,7 @@
 import os, sys, time, logging
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
-from math import prod
 import numpy as np
-#from rdp import rdp
 import json
 from shapely.geometry import Polygon
 import rasterio

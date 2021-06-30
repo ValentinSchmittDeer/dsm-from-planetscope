@@ -16,7 +16,7 @@ __all__ =['SetupLogger', 'SubLogger', 'ProcessStdout', 'PrintPsItem', '_Colorful
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def SetupLogger(name='', output=None, *, color=True, ):
+def SetupLogger(name='', output=None, *, color=True ):
     '''
     Initialize logger and set its verbosity level to "DEBUG".
     

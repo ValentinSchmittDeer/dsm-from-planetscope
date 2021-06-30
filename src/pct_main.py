@@ -2,6 +2,7 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
+print (sys.version)
 from pprint import pprint
 from glob import glob
 
