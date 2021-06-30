@@ -4,10 +4,11 @@
 import os, sys, argparse, time
 from pprint import pprint
 import json
+from datetime import date, datetime
+from shutil import copy2
 
 # PyValLib packages
-from PVL.PVL_Logger import SetupLogger, ProcessStdout
-#from PVL.PVL_Rpc import *
+from PVL.PVL_Logger import SetupLogger, PrintPsItem
 
 # dsm_from_planetscope libraries
 import lib_auth
@@ -16,192 +17,203 @@ from SSBP import *
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
-__title__=os.path.basename(sys.argv[0])[:-3]
+__title__=os.path.basename(sys.argv[0]).split('.')[0]
 __author__='Valentin Schmitt'
 __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
     Main Task
+Run a scene search command through custumer API and build up scene bocks
+based on found products. Also create the data repository and block desciptors.
+If a previous search result is fit in, the 'former search' mode skips 
+the API search request.
 
 **************************************************************************
-> Steps
+> Authentication
+> Create filter with input arguments
+> Fire off the request and store it
+> Block creation and filtering
+> Scene pair retrieval 
+> Coverge image creation
+> Create data repository and block desciptors
+
 **************************************************************************
 '''% (__title__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-
+lstInst=('PS2', 'PS2.SD', 'PSB.SD')
 
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-class Obj():
-    '''
-    Desciption
-    
-    arg1 (int):
-    arg2 (float): [default=0]
-    arg3 (sting):
-    arg4 tuple=(x, y):
-    
-    out:
-        jojo (int):
-    '''
-    
-    def __init__(self, arg1, arg3, arg4, arg2=0):
-        self.arg2=arg2
-    
-    def __str__(self):
-        return string(self.arg2)
-    
-    def __obj__(self):
-        return self.arg2
-    
-    def Funct1(self,arg5):
-        '''Desciption'''
 
-#=======================================================================
-#main
-#-----------------------------------------------------------------------
-if __name__ == "__main__":
+def main(args):
     try:
         print()
         logger = SetupLogger(name=__title__)
         #---------------------------------------------------------------
-        # Retrieval of arguments
-        #---------------------------------------------------------------
-        parser.add_argument('-i',required=True,help='Input geometry geojson')
-        parser.add_argument('-o',required=True,help='Working directory for outputs')
-
-        # Optional parameters
-        parser.add_argument('-itemType',nargs='+',default=['PSScene3Band', 'PSScene4Band'] ,help='Item type from Planet API list (default: \'PSScene3Band\', \'PSScene4Band\')')
-
-        args = parser.parse_args()
-        
-        logger.info("Arguments: " + str(vars(args)))
-        #sys.exit()
-        
-        #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
         if not os.path.isfile(args.i) or not args.i.endswith('geojson'): raise RuntimeError("Wrong input file")
+        with open(args.i) as fileIn:
+            featAoi=json.load(fileIn)
+            crs=featAoi['crs']['properties']['name']
+            if not crs=="urn:ogc:def:crs:OGC:1.3:CRS84": raise RuntimeError("Input geometry must be in WGS84 (EPSG:4326)")
+
+        if args.iSrch:
+            with open(args.iSrch) as fileIn:
+                try:
+                    lstFeat=json.load(fileIn)
+                except json.decoder.JSONDecodeError as msg:
+                    raise RuntimeError("Input search holds mistake: %s"% msg)
+            logger.warning('Former search mode')
+            nameAoiOut=os.path.basename(args.i).split('.')[0]
+            nameSearch=os.path.basename(args.iSrch).split('.')[0]
+            checkSearch=False
+        else:
+            logger.warning('New search mode')
+            checkSearch=True
+            nameSearch=nameOutFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
+            nameAoiOut=nameAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
+                
         if not os.path.isdir(args.o): raise RuntimeError("Wrong working directory")
         
-        #---------------------------------------------------------------
-        # Setup Auth
-        #---------------------------------------------------------------
-        logger.info('## Setup Auth')
-        session=lib_auth.PlAuth()
-        errDic={1:'PL_API_KEY does not exist'}
-        if type(session)==int: raise RuntimeError(errDic[session])
-
-        #---------------------------------------------------------------
-        # Item searching 
-        #---------------------------------------------------------------
-        logger.info('## Item searching ')
+        # Optional search parameters
+        if not 0<=args.cloudUnder<=100: raise RuntimeError("-cloudUnder must be [0-100]")
         
-        jsonParam=vars(args).copy()
-        del jsonParam['i']
-        del jsonParam['o']
-        
-        with open(args.i) as fileIn:
-            geomIn=json.load(fileIn)
-        jsonParam['geom']=geomIn
+        if args.dateAcq:
+            if not len(args.dateAcq)==2: raise RuntimeError("-dateAcq must be 2 dates")
+            for i in range(2):
+                dateStr=args.dateAcq[i]
+                dateObj=date.fromisoformat(dateStr)
 
-        filterJsonCur=lib_search.MakeFiter(jsonParam)
-        errDic={1:'Unknown key', 2:'Only 1 feature is managened in geometry file for the moment'}
-        if type(filterJsonCur)==int: raise RuntimeError(errDic[filterJsonCur])
+                if i==1 and not dateObj>args.dateAcq[0]: raise RuntimeError("-dateAcq must be written in correct order")
+
+                args.dateAcq[i]=dateObj
+        
+        if False in [instCur in lstInst for instCur in args.inst]: raise RuntimeError("-inst must be <PS2|PS2.SD|PSB.SD>")
+
+        if not args.b in lstBMethod: raise RuntimeError("-b must be one of %s"% str(lstBMethod))
+        if not args.f in lstBFilter: raise RuntimeError("-f must be one of %s"% str(lstBFilter))
         
 
-
-
-        #---------------------------------------------------------------
-        # Step
-        #---------------------------------------------------------------
-        logger.info('## Step')
-        
-        #---------------------------------------------------------------
-        # Step
-        #---------------------------------------------------------------
-        #logger.info('## Step')
-        #logger.info('This is a info')
-        #logger.warning('This is a warning')
-        #logger.error('This is an error')
-        #logger.critical('This is critical')
-        
-        #imax=30
-        #procBar=ProcessStdout(name='Loop i',inputCur=imax)
-        #for i in range(imax):
-        #    procBar.ViewBar(i)
-        #    for i in list(range(20000)):
-        #        if not i in list(range(20000)): continue
-        #        str(list(range(20000)).index(i))
-        
-        #lst=['a','b','c','d','e','f','g']
-        #procBar=ProcessStdout(name='Loop List',mode='list',inputCur=lst)
-        #for i in range(len(lst)):
-        #    logger.info(procBar.ViewList(i))
-        #    for i in list(range(20000)):
-        #        if not i in list(range(20000)): continue
-        #        str(list(range(20000)).index(i))
-        
+        logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
         
+        print()
+        if checkSearch:
+            #---------------------------------------------------------------
+            # Setup Auth
+            #---------------------------------------------------------------
+            logger.info('# Setup Auth')
+            session=lib_auth.PlAuth()
+            errDic={1:'PL_API_KEY does not exist'}
+            if type(session)==int: raise RuntimeError(errDic[session])
+
+            #---------------------------------------------------------------
+            # Filter creation
+            #---------------------------------------------------------------
+            logger.info('# Filter creation ')
+            
+            jsonParam=vars(args).copy()
+            for keyCur in list(jsonParam.keys()):
+                if not keyCur in lstKeySearch: del jsonParam[keyCur]
+            
+            jsonParam['geom']=featAoi
+
+            filterJson=SSBPlib_search.MakeFiter(jsonParam,nameSearch)
+            
+            #---------------------------------------------------------------
+            # Fire off request
+            #---------------------------------------------------------------
+            logger.info('# Fire off request ')
+            lstFeat=SSBPlib_search.PostRequest(session, filterJson)
+
+            #PrintPsItem(lstFeat)
+
+            # Store search
+            pathOut=os.path.join(args.o, nameAoiOut+'.geojson')
+            copy2(args.i,pathOut)
+
+            pathOut= os.path.join(args.o, nameSearch+'.json')
+            with open(pathOut,'w') as fileOut:
+                strOut=json.dumps(lstFeat, indent=2)
+                fileOut.write(strOut)
+
+            pathOut=pathOut.replace('json','geojson')
+            with open(pathOut,'w') as fileOut:
+                objOut=basicGeojson
+                objOut['name']=nameSearch
+                objOut['features']=lstFeat.copy()
+                fileOut.write(json.dumps(objOut, indent=2))
+
+
+        
+        logger.info(f'{len(lstFeat)} found scenes')
+        
         #---------------------------------------------------------------
-        # Matplotlib Stdout
+        # Block creation
         #---------------------------------------------------------------
-        # Simple figure with subplots
-        '''import matplotlib.pyplot as plt
-        fig, graph = plt.subplots(2, 2)
+        logger.info('# Block creation')
+        objBlocks=SSBPlib_block.SceneBlocks(lstFeat, args.o, args.b)
+        logger.info(objBlocks)
         
-        graph[0, 0].plot(x,y,'',label='')
+        #---------------------------------------------------------------
+        # Block filtering
+        #---------------------------------------------------------------
+        logger.info('# Block filtering')
+        objBlocks.FilterBlock(args.f)
+        logger.error('read extended MD and stor them in Json file')
+        logger.error('compute B/H from sat_az and sat_elev')
+        logger.info(objBlocks)
+        objBlocks.StereoCoupling()
+        objBlocks.Coverage(featAoi)
         
-        graph[0, 0].set_title('subplot')
-        graph[0, 0].set_xlabel('X')
-        graph[0, 0].set_ylabel('Y')
-        graph[0, 0].legend()
-        
-        fig.suptitle('BigTitle')
-        plt.show()
-        '''
-        
-        #Figure with merged subplots
-        '''import matplotlib.pyplot as plt
-        fig = plt.figure(1,[15,9])
-        
-        graph = fig.subplot(rci)
-        graph.plot(x,y,'',label='')
-        
-        graph = plt.subplot(r,c,(i1, i2))
-        graph.plot(x,y,'',label='')
-        
-        graph.set_title('subplot')
-        graph.set_xlabel('X')
-        graph.set_ylabel('Y')
-        graph.legend()
-        
-        fig.suptitle('BigTitle')
-        plt.show()'''
-        
-        #Figure 3D
-        '''import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-        
-        fig = plt.figure(1,[15,9])
-        graph=fig.add_subplot(111, projection='3d')
-        graph.plot(x,y,z,'',label='')
-        
-        graph.set_title('subplot')
-        graph.set_xlabel('X')
-        graph.set_ylabel('Y')
-        graph.legend()
-        
-        fig.suptitle('BigTitle')
-        plt.show()'''
+
+        #---------------------------------------------------------------
+        # Block storage
+        #---------------------------------------------------------------
+        logger.info('# Block storage')
+        objBlocks.WriteBlocks()
+        #pprint(objBlocks.__dir__())
         
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------
     except RuntimeError as msg:
         logger.critical(msg)
+
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
+        #---------------------------------------------------------------
+        # Retrieval of arguments
+        #---------------------------------------------------------------
+        parser.add_argument('-i', required=True, help='Input geometry (geojson)')
+        parser.add_argument('-o', required=True, help='Working directory for outputs')
+
+        # Block parameters
+        parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
+        parser.add_argument('-f', default='fp', help='Block filtering mode <fp|> (default: fp=footprint)')
+
+        # Optional search parameters
+        parser.add_argument('-iSrch', help='Input former search result (json), cancels another search step')
+        parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
+        parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
+        parser.add_argument('-cloudUnder', type=int, default=0.1, help='Maximum cloud coverage %% integer')
+        parser.add_argument('-dateAcq', nargs='+', help='Acquisition date yyyy-mm-dd past in the order')
+        parser.add_argument('-inst', nargs='+', default=['PS2'], help='Dove generation(s) <PS2|PS2.SD|PSB.SD> (default:PS2)')
+        parser.add_argument('-viewAngle', type=float, help='Maximum view angle')
+        parser.add_argument('-gsd', type=float, help='Maximum gsd')
+        parser.add_argument('-quali', help='Product quality')
+        lstKeySearch=('itemType', 'assetType', 'cloudUnder', 'dateAcq', 'inst', 'viewAngle', 'gsd', 'quali')
+
+        argsMain = parser.parse_args()
+
+        main(argsMain)
+
+        print('\nEND, Continue with scene creation')
+

@@ -4,12 +4,15 @@
 import os, sys, argparse, time
 from pprint import pprint
 
+# PyValLib packages
 from PVL.PVL_Logger import SetupLogger, ProcessStdout
 from PVL.PVL_Rpc import *
+
+# dsm_from_planetscope libraries
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
-__title__=os.path.basename(sys.argv[0])[:-3]
+__title__=os.path.basename(sys.argv[0]).split('.')[0]
 __author__='Valentin Schmitt'
 __version__=1.0
 parser = argparse.ArgumentParser(description='''
@@ -88,18 +91,19 @@ if __name__ == "__main__":
         else:
             args.listFile=None
         
-        logger.info("Arguments: " + str(vars(args)))
-        #sys.exit()
+        
         
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
         if os.path.isfile(args.juju): raise RuntimeError("juju exists")
         
+        logger.info("Arguments: " + str(vars(args)))
+        #sys.exit()
         #---------------------------------------------------------------
         # Step
         #---------------------------------------------------------------
-        logger.info('## Step')
+        logger.info('# Step')
         
         #---------------------------------------------------------------
         # Step

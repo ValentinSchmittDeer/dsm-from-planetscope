@@ -2,17 +2,16 @@
 # -*- coding: UTF-8 -*-'''
 # Copyright PythonValentinLibrary
 
-import sys, logging, time
+import os, sys, logging, time
 from datetime import datetime
 from termcolor import colored
 
-#-------------------------------------------------------------------
-# Usage
-#-------------------------------------------------------------------
-__all__ =['SetupLogger', 'ProcessStdout', 'PrintPsItem', '_ColorfulFormatter']
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
+__author__='Valentin Schmitt'
+__version__=1.0
+__all__ =['SetupLogger', 'SubLogger', 'ProcessStdout', 'PrintPsItem', '_ColorfulFormatter']
 
 #-----------------------------------------------------------------------
 # Hard command
@@ -72,6 +71,36 @@ def SetupLogger(name='', output=None, *, color=True, ):
         logger.addHandler(fh)
 
     return logger
+
+def SubLogger(lvl, msg, *, name=None):
+    """
+    Log only for the first n times.
+    Args:
+        lvl (int): the logging level
+        msg (str):
+        name (str): name of the logger to use. Will use the caller's module by default.
+    """
+    caller_module, caller_key = _find_caller()
+    
+    msg= caller_key[-1] + ': ' + msg
+    
+    logging.getLogger(name or caller_module).log(lvl, msg)
+    if lvl==logging.CRITICAL: sys.exit()
+
+def _find_caller():
+    """
+    Returns:
+        str: module name of the caller
+        tuple: a hashable key to be used to identify different callers
+    """
+    frame = sys._getframe(2)
+    while frame:
+        code = frame.f_code
+        if os.path.join("utils", "logger.") not in code.co_filename:
+            mod_name = frame.f_globals["__name__"]
+            #return mod_name, (code.co_filename, frame.f_lineno, code.co_name)
+            return mod_name, (code.co_filename, frame.f_lineno, code.co_name)
+        frame = frame.f_back
 
 class ProcessStdout:
     '''
@@ -181,7 +210,8 @@ def PrintPsItem(lstIn,select=False):
                     ['{:6s}'.format(feat["properties"]['satellite_id']) for feat in lstIn],
                     ['{:6s}'.format(''.join([l for l in feat["properties"]['item_type'] if l.isupper() or l.isnumeric()])) for feat in lstIn],
                     ['{:<21s}'.format(feat["properties"]['acquired'][:-6].replace('T',' ')) for feat in lstIn],
-                    ['{:^6.0f}'.format(feat["properties"]['cloud_cover']*100) for feat in lstIn],
+                    ['{:3.0f}-{:<3.0f}'.format(feat["properties"]['cloud_cover']*100,
+                                              feat["properties"]['cloud_percent']) for feat in lstIn],
                     ['{:6.2f}'.format(feat["properties"]['gsd']) for feat in lstIn],
                     ['{:2b}'.format(feat["properties"]['ground_control']) for feat in lstIn]))
     lstSelect=[]
@@ -229,3 +259,5 @@ class _ColorfulFormatter(logging.Formatter):
         else:
             return log
         return prefix + " " + log
+
+

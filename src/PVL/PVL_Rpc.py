@@ -12,13 +12,13 @@ from scipy.linalg import lstsq
 from sklearn.preprocessing import PolynomialFeatures
 from math import pi
 
-#-------------------------------------------------------------------
-# Usage
-#-------------------------------------------------------------------
-__all__ =['RPCin','AffineTransfo','Geo2Cart_Elli','DisplayMat']
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
+__author__='Valentin Schmitt'
+__version__=1.0
+__all__ =['RPCin','AffineTransfo','Geo2Cart_Elli','DisplayMat']
+
 gdinfo='gdalinfo'
 
 #-----------------------------------------------------------------------

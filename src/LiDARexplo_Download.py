@@ -10,7 +10,6 @@ import json
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
-__title__=os.path.basename(sys.argv[0])[:-3]
 __author__='Valentin Schmitt'
 __version__=1.0
 parser = argparse.ArgumentParser(description='''
@@ -20,7 +19,7 @@ parser = argparse.ArgumentParser(description='''
 **************************************************************************
 > 
 **************************************************************************
-'''% (__title__,__version__,__author__),
+'''% (__name__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
