@@ -1,10 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
 from pprint import pprint
 import json
-from datetime import date, datetime
+from datetime import datetime
 from shutil import copy2
 
 # PyValLib packages
@@ -49,14 +49,14 @@ lstInst=('PS2', 'PS2.SD', 'PSB.SD')
 # Hard command
 #-----------------------------------------------------------------------
 
-def main(args):
+def Main(args):
     try:
         print()
         logger = SetupLogger(name=__title__)
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
-        if not os.path.isfile(args.i) or not args.i.endswith('geojson'): raise RuntimeError("Wrong input file")
+        if not os.path.isfile(args.i) or not args.i.endswith('geojson'): raise RuntimeError("-i file not found")
         with open(args.i) as fileIn:
             featAoi=json.load(fileIn)
             crs=featAoi['crs']['properties']['name']
@@ -68,17 +68,15 @@ def main(args):
                     lstFeat=json.load(fileIn)
                 except json.decoder.JSONDecodeError as msg:
                     raise RuntimeError("Input search holds mistake: %s"% msg)
-            logger.warning('Former search mode')
             nameAoiOut=os.path.basename(args.i).split('.')[0]
             nameSearch=os.path.basename(args.iSrch).split('.')[0]
             checkSearch=False
         else:
-            logger.warning('New search mode')
             checkSearch=True
             nameSearch=nameOutFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
             nameAoiOut=nameAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
                 
-        if not os.path.isdir(args.o): raise RuntimeError("Wrong working directory")
+        if not os.path.isdir(args.o): raise RuntimeError("-o working directory not found")
         
         # Optional search parameters
         if not 0<=args.cloudUnder<=100: raise RuntimeError("-cloudUnder must be [0-100]")
@@ -87,7 +85,7 @@ def main(args):
             if not len(args.dateAcq)==2: raise RuntimeError("-dateAcq must be 2 dates")
             for i in range(2):
                 dateStr=args.dateAcq[i]
-                dateObj=date.fromisoformat(dateStr)
+                dateObj=datetime.strptime(dateStr,'%Y-%m-%d')
 
                 if i==1 and not dateObj>args.dateAcq[0]: raise RuntimeError("-dateAcq must be written in correct order")
 
@@ -101,17 +99,18 @@ def main(args):
 
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
+        if not checkSearch: logger.warning('Former search mode')
         
+
         print()
         if checkSearch:
+            logger.warning('New search mode')
             #---------------------------------------------------------------
             # Setup Auth
             #---------------------------------------------------------------
             logger.info('# Setup Auth')
             session=lib_auth.PlAuth()
-            errDic={1:'PL_API_KEY does not exist'}
-            if type(session)==int: raise RuntimeError(errDic[session])
-
+            
             #---------------------------------------------------------------
             # Filter creation
             #---------------------------------------------------------------
@@ -151,7 +150,7 @@ def main(args):
 
 
         
-        logger.info(f'{len(lstFeat)} found scenes')
+        logger.info('%i found scenes'% len(lstFeat))
         
         #---------------------------------------------------------------
         # Block creation
@@ -213,7 +212,7 @@ if __name__ == "__main__":
 
         argsMain = parser.parse_args()
 
-        main(argsMain)
+        Main(argsMain)
 
         print('\nEND, Continue with scene creation')
 

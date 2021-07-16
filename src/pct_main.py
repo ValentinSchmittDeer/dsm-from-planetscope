@@ -2,9 +2,9 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
-print (sys.version)
 from pprint import pprint
 from glob import glob
+from select import select
 
 # PyValLib packages
 from PVL.PVL_Logger import SetupLogger, ProcessStdout
@@ -38,34 +38,28 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 def FindBDir(pathDir):
     regexDir=os.path.join(pathDir, nameBlock.format('*'))
+    lstGlob=glob(regexDir)
+    lstGlob.sort()
+    
     lstDir=[]
-    for pathCur in glob(regexDir):
+    for pathCur in lstGlob:
         nameB= os.path.basename(pathCur)
         lstDir.append((nameB, os.path.join(pathCur, nameBlockFile.format(nameB, 'SceneId.txt'))))
     return lstDir
 
-
-
-
-#=======================================================================
-#main
-#-----------------------------------------------------------------------
-if __name__ == "__main__":
+def Main(args):
     try:
-        print()
-        logger = SetupLogger(name=__title__)
-        #---------------------------------------------------------------
-        # Retrieval of arguments
-        #---------------------------------------------------------------
-        parser.add_argument('-i', required=True, help='Working directory')
-
-        print('product level from PlIntern variable')
-        args = parser.parse_args()
-        
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
-        if not os.path.isdir(args.i): raise RuntimeError("Wrong working directory")
+        if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
+        
+        if not args.l: 
+            args.l= list(dicLevel.keys())[0]
+        else:
+            if not args.l in lstLevel: raise RuntimeError("-l must be one of %s"% str(lstLevel))
+        
+        if False in [act in lstAction for act in args.action]: raise RuntimeError("-action must be one of %s"% str(lstAction))
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
@@ -74,36 +68,72 @@ if __name__ == "__main__":
         # Check planet_common 
         #---------------------------------------------------------------
         logger.info('# Check planet_common ')
-        #if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
+        if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
+        
+        logger.warning('%s mode'% args.action)
+        if __name__ == "__main__" and (args.action=='create' or args.action=='download'):
+            ans=input('Are you sure? (y|[n]):')
+            if not ans=='y': raise RuntimeError("No creation mode")
         
         #---------------------------------------------------------------
         # Read Repo
         #---------------------------------------------------------------
         logger.info('# Read Repo')
-        #objBlocks=SceneBlocks([], args.i, 'dir')
         lstBlock=FindBDir(args.i)
         
         #---------------------------------------------------------------
-        # Create sh script
+        # Loop per block
         #---------------------------------------------------------------
-        logger.info('# Create sh script')
+        logger.info('# Action per block')
+        
         lstPathScp=[]
         for nameB, pathTxt in lstBlock:
-            print(nameB)
-            print('check available buckets')
-            newBucket=PCTlib_product.PCTBucket(nameB,pathTxt)
-            print(newBucket)
-            sys.exit()
-            print('create shell per block')
-            pathScp= pathTxt.replace('SceneId.txt', 'CreationScp.sh')
-            PIlib_creation.MakeScript_JSBatchMake(pathTxt, pathScp)
-            lstPathScp.append(pathScp)
+            if args.b and not nameB in args.b: continue
+            
+            print()
+            logger.info(nameB)
+            newBucket=PCTlib_product.PCTBucket(nameB,pathTxt, args.l)
+            
+            if 'match' in args.action:
+                logger.info(newBucket)
+                newBucket.Match()
+            
+            if 'create' in args.action:
+                newBucket.Create()
+            
+            if 'list' in args.action:
+                print(newBucket.List())
 
-        
-        print('create shell cript general')
+            if 'download' in args.action:
+                newBucket.Down()
+
         
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------
     except RuntimeError as msg:
         logger.critical(msg)
+
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
+    
+        print()
+        logger = SetupLogger(name=__title__)
+        #---------------------------------------------------------------
+        # Retrieval of arguments
+        #---------------------------------------------------------------
+        parser.add_argument('-i', required=True, help='Working directory')
+        
+        # Optional arguments
+        parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
+        parser.add_argument('-l', help='Product process level (default: from PCT.__ini__)')
+        parser.add_argument('-action', nargs='+', default=['match'], help='script kind of action <match|list|create|download> (default: match)')
+        
+
+        argsMain = parser.parse_args()
+        
+        Main(argsMain)
+
+        print('\nEND, Continue with bundle adjsut')        

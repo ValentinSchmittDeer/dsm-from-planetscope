@@ -27,7 +27,8 @@ SetupLogger(name=__name__)
 
 class SceneBlocks():
     '''
-    Block creation object using the list of feature 
+    Block creation object using the list of feature. One object SceneBlocks holds 
+    all blocks information
     
     lstIn (list): list of feature with custumer metatdata (json obj)
     pathOut (str): output directory
@@ -56,10 +57,10 @@ class SceneBlocks():
         if not os.path.isdir(pathOut): SubLogger(logging.CRITICAL, 'pathOut must be a directory')
         self.dirOut=pathOut
 
-        SubLogger(logging.ERROR, 'create block from best B/H per ground unit (10m) amoung big dataset')
         if meth=='one':
             self.Build_One(lstIn)
         elif meth=='month':
+            SubLogger(logging.ERROR, 'create block from best B/H per ground unit (10m) amoung big dataset')
             self.Build_Month(lstIn)
         elif meth=='dir':
             self.Build_Dir()
@@ -67,7 +68,7 @@ class SceneBlocks():
             SubLogger(logging.CRITICAL, 'Unknown block method (%s)'% meth)
 
     def __str__(self):
-        return '\n\t\t'.join(['Block List:', '(Block ID, Feature number, Dir name)']+[str(tu) for tu in self.lstBId])
+        return '\n\t\t'.join(['Block List:', '(Block ID, Feature number)']+[str(tu) for tu in self.lstBId])
 
     def Build_One(self, lstIn):
         '''
@@ -117,13 +118,14 @@ class SceneBlocks():
         '''
         from SSBP import nameBlock
 
-        lstSceneDate=[datetime.fromisoformat(\
+        lstSceneDate=[datetime.strptime(\
                         feat\
                             ['properties']\
                                 ['acquired']\
                                     .replace('Z','')\
-                                        .ljust(26, '0'))\
-                                            for feat in lstIn]
+                                        .ljust(26, '0'),
+                                        '%Y-%m-%dT%H:%M:%S.%f')\
+                                        for feat in lstIn]
         lstSceneDate.sort()
         
         # Scene clustering
@@ -211,11 +213,6 @@ class SceneBlocks():
             pathDescip=os.path.join(pathB, nameBlockFile.format(nameB, 'Couple.json'))
             if os.path.exists(pathDescip):
                 with open(pathDescip) as fileIn:
-                    #txtin=fileIn.read()
-                    #txt=txtin[390:400]
-                    #print(txt)
-                    #pprint(eval(txt))
-                    #sys.exit()
                     self.lstBCouple.append(json.load(fileIn))
 
     def FilterBlock(self, fType, lstBI=False):
@@ -251,7 +248,7 @@ class SceneBlocks():
         
         setFeatPop=set()
         SubLogger(logging.INFO, 'Identical scenes:') 
-        print('[', end='')
+        #print('[', end='')
         for i in range(self.lstBId[bI][1]):
             for j in range(i+1,self.lstBId[bI][1]):
                 # Basic on footprint
@@ -263,7 +260,7 @@ class SceneBlocks():
                 if out: continue
 
                 # Cloudness discrimination
-                QCloudDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance)
+                out=QCloudDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance)
                 if out: setFeatPop.add(lstInd[out])
 
                 # Sun elev discrimination
@@ -274,9 +271,10 @@ class SceneBlocks():
                 out=QQualiDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance['quali'])
                 if out: setFeatPop.add(lstInd[out])
 
-                print((lstBFeatCur[i]['id'],lstBFeatCur[j]['id']), end='')
+                #print((lstBFeatCur[i]['id'],lstBFeatCur[j]['id']), end='')
                 setFeatPop.add(j)
-        print(']\n=> %i removed scenes'% len(setFeatPop))
+        #print(']\n=> %i removed scenes'% len(setFeatPop))
+        print('=> %i removed scenes'% len(setFeatPop))
         
         if setFeatPop:
             self.lstBFeat[bI]=[lstBFeatCur[i] for i in range(self.lstBId[bI][1]) if not i in setFeatPop]
@@ -313,8 +311,8 @@ class SceneBlocks():
                     if not geom1.intersects(geom2): continue
                     
                     newCouple=dicCouple.copy()
-                    newCouple['properties']['Scene1']=feat1['id']
-                    newCouple['properties']['Scene2']=feat2['id']
+                    newCouple['properties']['scene1']=feat1['id']
+                    newCouple['properties']['scene2']=feat2['id']
 
                     geomInters=geom1.intersection(geom2)
                     newCouple["geometry"]["type"]= geomInters.geom_type
@@ -335,7 +333,7 @@ class SceneBlocks():
                     self.lstBCouple[-1].append(deepcopy(newCouple))
                     
             
-            SubLogger(logging.INFO, '=> %i scene couples'% len(self.lstBCouple[-1]))
+            SubLogger(logging.INFO, '=> %i stereo pairs'% len(self.lstBCouple[-1]))
             
     def Coverage(self, featAoi, lstBI=False):
         '''
@@ -433,13 +431,12 @@ class SceneBlocks():
                                 )
         return frameOut
             
-    def WriteBlocks(self, lstBI=False, simpleGeom=False):
+    def WriteBlocks(self, lstBId=False, simpleGeom=False):
         '''
         Write block descriptors at the given path creating block subfolder.
 
-        lstBI (list): list of block index to write (default: False means all blocks).
-            To index list can be created from block ID list (lstBId) by:
-                [self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBId] 
+        lstBId (list): list of block name to write (default: False means all blocks).
+            e.g.: ['B202010', 'B202011'] 
         simpleGeom (bool): replace existing geometry by the simplify one.
         out:
         '''
@@ -448,8 +445,12 @@ class SceneBlocks():
         from SSBP import rdpEpsi, nameBlockFile, sceneIdExt, basicGeojson
         
         # Write all files
-        if not lstBI: lstBI=range(self.nbB)
-        for bI in lstBI:
+        if lstBId:
+             lstBId=[self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBId]
+        else:
+            lstBId=range(self.nbB)
+
+        for bI in lstBId:
             SubLogger(logging.INFO, self.lstBId[bI][0])
 
             # Creation simplify geometry
@@ -492,14 +493,14 @@ class SceneBlocks():
                     fileOut.write('[\n')
                     fileOut.write(',\n'.join([str(item).replace('\'','"') for item in self.lstBCouple[bI]]))
                     fileOut.write('\n]')
-
+            
             # Coverage tif
             if 'lstCoverage' in self.__dir__():
                 pathOut= os.path.join(pathDir, nameBlockFile.format(self.lstBId[bI][0], 'Coverage.tif'))
                 if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
                 with rasterio.open(pathOut,'w',**self.lstCoverage[bI][0]) as fileOut:
                     for iFrame in range(1,len(self.lstCoverage[bI])):
-                        fileOut.write(self.lstCoverage[bI][iFrame], iFrame)
+                        fileOut.write(self.lstCoverage[bI][iFrame].astype('uint8'), iFrame)
 
 
 def Date2Int(datetimeObj):

@@ -111,7 +111,7 @@ class ProcessStdout:
     
     name (string): process name
     mode (string: bar|list): mode selection [default=bar]
-    inputCur [mandatory]: in Bar mode, inputCur is maximum i (int)
+    inputCur [mandatory]: in Bar mode, inputCur is maximum i (int>0)
                           in List mode, inputCur is looping list with stringable items
     lengthBar: progress bar length [default 50 (bar) or 30 (list)]
     
@@ -126,7 +126,7 @@ class ProcessStdout:
                 self.Error()
         
         if mode=='bar':
-            if type(inputCur)==int:
+            if type(inputCur)==int and inputCur>0:
                 self.iMax=inputCur
             else:
                 self.Error()

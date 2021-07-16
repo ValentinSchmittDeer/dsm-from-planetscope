@@ -3,6 +3,8 @@
 
 import os, sys
 import requests
+import logging
+from PVL.PVL_Logger import SetupLogger, SubLogger
 
 #-----------------------------------------------------------------------
 # Hard arguments
@@ -10,7 +12,7 @@ import requests
 __author__='Valentin Schmitt'
 __version__=1.0
 __all__ =['PlAuth',]
-
+SetupLogger(name=__name__)
 
 
 #-----------------------------------------------------------------------
@@ -23,11 +25,9 @@ def PlAuth():
 
     out:
         session (request obj): active session
-        OR
-        error (int): {1:'PL_API_KEY does not exist'}
     ''' 
     PLANET_API_KEY = os.getenv('PL_API_KEY')
-    if not PLANET_API_KEY: return 1
+    if not PLANET_API_KEY: SubLogger(logging.CRITICAL, '$PL_API_KEY not found in .bashrc')
 
     session = requests.Session()
     session.auth = (PLANET_API_KEY, '')
