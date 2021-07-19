@@ -290,6 +290,7 @@ class BunAdjParam:
         args+= lstTsai
         args+=[## Key points
                 '--overlap-list', self.dicPath['pPairs'], # stereopair file for key point extraction
+                '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 '--heights-from-dem', self.dicPath['pDem'], # fix key point height from DSM
@@ -323,6 +324,7 @@ class BunAdjParam:
         args.append(self.dicPath['baIO']+'*.gcp')
         args+=[## Key points
                 '--overlap-list', self.dicPath['pPairs'], # stereopair file for key point extraction
+                '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former key points
                 '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
                 ## Model
@@ -347,82 +349,7 @@ class BunAdjParam:
 
         return args
 
-def CreateKp2Gcp(pathDict, step):
-    '''
-    Gather cnet.csv (original matches) and final_residuals_no_loss_function_pointmap_point_log.csv
-    (after adjustment position) key point into a gcp format file kp2gcp.gcp
 
-    pathDict (dict): dict of all paths
-    step (str <KP|EO|IO>): path selection
-    out:
-        0: overwrite kp2gcp.gcp file  
-    '''
-    #from shapely.geometry import Point
-    gsdCur=4
-    maxRadius=1e-3
-
-    if not step=='KP' and not step=='EO' and not step=='IO': SubLogger(logging.CRITICAL, 'Unknownn step (%s)'% step)
-    dirIn=pathDict['ba'+step]
-    pathOut=dirIn+'-kp2gcp.gcp'
-    if os.path.exists(pathOut): SubLogger(logging.WARNING, 'Overwrite %s'% os.path.basename(pathOut))
-
-    lstOut=[]
-    
-    pathIn=dirIn+'-cnet.csv'
-    if not os.path.exists(pathIn): SubLogger(logging.CRITICAL, 'bundle adjustment file not found %s'% pathIn)
-    with open(pathIn) as fileIn:
-        lstCnetStr=[[word for word in line.strip().split()] for line in fileIn.readlines()]
-
-    pathIn=dirIn+'-final_residuals_no_loss_function_pointmap_point_log.csv'
-    if not os.path.exists(pathIn): SubLogger(logging.CRITICAL, 'bundle adjustment file not found %s'% pathIn)
-    with open(pathIn) as fileIn:
-        i=-1
-        for lineĆur in fileIn:
-            if lineĆur.startswith('#'): continue
-            lstWords=lineĆur.strip().split(', ')
-            
-            # Filter using residuals
-            if float(lstWords[3])>10: continue
-            
-            # X, Y, Z
-            i+=1
-            lstPtIn=[str(i), lstWords[1], lstWords[0], lstWords[2]]
-            
-            # accX, accY, accZ
-            lstPtIn+=[str(float(lstWords[3])*gsdCur)]*2+['1000']
-            
-            # Img, x, y, accx, accy ...
-            lstJ,lstDist=[],[]
-            for j in range(len(lstCnetStr)):
-                
-                sqSum=0
-                checkKeep=True
-                k=0
-                while k<2 and checkKeep: 
-                    k+=1
-                    diffCoord=float(lstCnetStr[j][k])-float(lstPtIn[k])
-                    if abs(diffCoord)>maxRadius: 
-                        checkKeep=False
-                    else:
-                        sqSum+=diffCoord**2
-                
-                if checkKeep: 
-                    lstJ.append(j)
-                    lstDist.append(sqSum**0.5)
-            
-            if not lstJ: SubLogger(logging.CRITICAL, 'Original point not found, increase radius')
-            
-            jMin=lstJ[lstDist.index(min(lstDist))]
-            lstPtIn+=lstCnetStr[jMin][7:]
-            lstCnetStr.pop(jMin)
-
-            # Store
-            lstOut.append(lstPtIn)
-    
-    with open(pathOut,'w') as fileOut:
-        fileOut.writelines([' '.join(lstLine)+'\n' for lstLine in lstOut])
-    return 0
-        
 def CopyPrevBA(pathDict, stepIn, stepOut):
     '''
     

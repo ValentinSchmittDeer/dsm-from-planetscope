@@ -29,36 +29,11 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-
+addiPrefix='KPIEO-All'
 
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-class Obj():
-    '''
-    Desciption
-    
-    arg1 (int):
-    arg2 (float): [default=0]
-    arg3 (sting):
-    arg4 tuple=(x, y):
-    
-    out:
-        jojo (int):
-    '''
-    
-    def __init__(self, arg1, arg3, arg4, arg2=0):
-        self.arg2=arg2
-    
-    def __str__(self):
-        return string(self.arg2)
-    
-    def __obj__(self):
-        return self.arg2
-    
-    def Funct1(self,arg5):
-        '''Desciption'''
-
 
 def ObjTsai(pathIn):
     dic={}
@@ -181,6 +156,7 @@ if __name__ == "__main__":
             name=os.path.basename(pathCur)
             dicTsai[name]=[ObjTsai(pathCur),]
         
+
         #---------------------------------------------------------------
         # Read next steps
         #---------------------------------------------------------------
@@ -188,17 +164,46 @@ if __name__ == "__main__":
         lstBaName=[]
 
         for pathBA in args.ba:
+            # Read camera
             lstBaName.append(os.path.basename(pathBA))
             grepTsai=os.path.join(pathBA,'*.tsai')
             for pathCur in glob(grepTsai):
-                name=os.path.basename(pathCur).strip('KPIEO-')
+                name=os.path.basename(pathCur).strip(addiPrefix)
                 dicTsai[name].append(ObjTsai(pathCur))
+
+            
+            # Read residuals
+            for step in ('initial', 'final'):
+                pathResInit=glob(os.path.join(pathBA,'*%s_residuals_no_loss_function_averages.txt'% step))
+                if not pathResInit: raise RuntimeError("%s residuals not found, please check name"% step)
+                pathResInit=pathResInit[0]
+                with open(pathResInit) as fileIn:
+                    checkCamPart=False
+                    for lineCur in fileIn:
+                        lineClean=lineCur.strip()
+                        if lineClean.startswith('Camera'): checkCamPart=True
+                        if not lineClean.startswith('/'): continue
+                        
+                        words=lineClean.split(', ')
+                        name=os.path.basename(words[0]).strip(addiPrefix)
+                        
+                        if not checkCamPart:
+                            dicTsai[name][-1]['resiKP-%s'% step]=float(words[1])
+                            dicTsai[name][-1]['numKP-%s'% step]=float(words[2])
+                        else:
+                            dicTsai[name][-1]['resiTrans-%s'% step]=float(words[1])
+                            dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
+
+
+
+
 
         #---------------------------------------------------------------
         # Summary table
         #---------------------------------------------------------------
         if args.noTable:
-            logger.info('# Summary table')
+            # Difference table
+            logger.info('# Summary table (Differences to original state)')
             Table_Line(['ImgID','Key', 'Init']+lstBaName)
             for kind in ('3DCentre', 'Direction', 'Angles', 'Focal', '2DPP'):
                 print(kind+':')
@@ -208,7 +213,7 @@ if __name__ == "__main__":
                     
                     i+=1
                     lstCur=dicTsai[key]
-                    Table_Direction(lstCur[2], lstCur[0])
+                    
                     if kind=='3DCentre':
                         lstOut=[Table_3DCentre(obj, lstCur[0]) for obj in lstCur]
                     elif kind=='Direction':
@@ -225,6 +230,30 @@ if __name__ == "__main__":
 
 
                     Table_Line([str(i),'Diff '+kind]+lstOut)
+            
+            # Residual table
+            logger.info('# Summary table (Residuals initial=>final)')
+            Table_Line(['ImgID','Key', 'Init']+lstBaName)
+            
+            for kind in ('Tranlation', 'Rotation', 'KeyPoint'):
+                print(kind+':')
+                if not args.longTable: continue
+                i=-1
+                for key in dicTsai:
+                    if len(dicTsai[key])==1: continue
+                    
+                    i+=1
+                    lstCur=dicTsai[key]
+                    
+                    if kind=='Tranlation':
+                        lstOut=['{0[resiTrans-final]:.3f}'.format(obj) for obj in lstCur[1:]]
+                    elif kind=='Rotation':
+                        lstOut=['{0[resiRot-final]:.3f}'.format(obj) for obj in lstCur[1:]]
+                    elif kind=='KeyPoint':
+                        
+                        lstOut=['{0[resiKP-initial]:.3f} => {0[resiKP-final]:.3f} ({0[numKP-final]:.0f} : {1:.0f})'.format(obj, obj['numKP-final']-obj['numKP-initial']) for obj in lstCur[1:]]
+                    
+                    Table_Line([str(i),'Resid '+kind, '/']+lstOut)
 
         
         #---------------------------------------------------------------
@@ -234,11 +263,12 @@ if __name__ == "__main__":
             logger.info('# Graph')
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D
-            
+            import matplotlib.colors as mcolors
+        
             fig = plt.figure(1,[15,9])
             graph=fig.add_subplot(111, projection='3d')
             
-            
+            lstColours=list(mcolors.TABLEAU_COLORS.values())
 
             i=-1
             for key in dicTsai:
@@ -246,7 +276,7 @@ if __name__ == "__main__":
 
                 i+=1
                 lstCur=dicTsai[key]
-                
+
                 matPts=np.array([obj['C'] for obj in lstCur])
                 matSclPts=np.vstack((matPts[[0],:],
                                     (matPts[1:,:]-matPts[0,:])*args.s+matPts[0,:]
@@ -257,8 +287,12 @@ if __name__ == "__main__":
                 
                 vect=np.array([[0],[0],[1]])*args.s
                 for j in range(1,matSclPts.shape[0]):
+                    if not i:
+                        labelStr=lstBaName[j-1]
+                    else:
+                        labelStr=''
                     # Camera centre BA
-                    graph.plot(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],'o',label='')
+                    graph.plot(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],'o', color=lstColours[j],label=labelStr)
                     # Camera orientation BA 
                     matR=np.array(lstCur[j]['R']).reshape(3,3)
                     vectR=matR@vect
@@ -293,7 +327,7 @@ if __name__ == "__main__":
             graph.set_xlabel('X (ECEF)')
             graph.set_ylabel('Y (ECEF)')
             graph.set_zlabel('Z (ECEF)')
-            #graph.legend()
+            graph.legend()
             
             fig.suptitle('Camera centres (scale %i)'% args.s)
             plt.show()
