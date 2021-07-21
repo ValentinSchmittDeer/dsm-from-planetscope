@@ -61,7 +61,7 @@ def BlockPathDict(pathDir, bId, pathDem):
             'pDem': pathDem,
             'pData': pathData,
             'pProcData': pathProcData,
-            'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
+            #'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
             'l': level,
             'lTup': dicLevel[level],
             'baKP': os.path.join(pathDir, bId, 'ASP-KeyPoints','KP'),
@@ -80,7 +80,6 @@ def CameraParam(pathDic, featCur):
         subArgs (dict): argument dictionary
     '''
     from ASfM import nameProcDataImg, nameTsai0
-    typeCam='RPC'
 
     # Initial files
     idImg=featCur['id']
@@ -173,7 +172,7 @@ def ConvertCameraParam(pathDic, featCur):
     return subArgs
 
 def StereoPairDescriptor(pathDict, lstPairs):
-    from ASfM import nameProcDataImg, nameTsai1
+    from ASfM import nameProcDataImg, nameTsai1, namePairDescip
     
     # Availability
     extImg=nameProcDataImg.format(pathDict['lTup'][1].split('.')[0])
@@ -201,9 +200,10 @@ def StereoPairDescriptor(pathDict, lstPairs):
         strOut='%s %s'% (path1,path2)
         lstOut.append(strOut)
     
-    with open(pathDict['pPairs'], 'w') as fileOut:
+    pathOut=os.path.join(pathDict['pB'], namePairDescip.format(os.path.basename(pathDict['pB'])))
+    with open(pathOut, 'w') as fileOut:
                     fileOut.write('\n'.join(lstOut))
-    return 0
+    return pathOut
 
 
 class BunAdjParam:
@@ -233,30 +233,29 @@ class BunAdjParam:
                 '--inline-adjustments', # Store result in .tsai, not in adjsut
                 ]
 
-    def __init__(self, pathDict, lstImg):
+    def __init__(self, lstImg, pathDem, pathPairTxt):
         from ASfM import nameTsai1
 
-        if not type(pathDict)==dict: SubLogger(logging.CRITICAL, 'Path dictionary (pathDict) must be a dictionary')
-        self.dicPath=pathDict
-
+        if not type(pathDem)==str: SubLogger(logging.CRITICAL, 'DEM path must a a string')
+        self.pathDem=pathDem
         if not type(lstImg)==list or False in [type(pathCur)==str for pathCur in lstImg]: SubLogger(logging.CRITICAL, 'Image list (lstImg) must be a list of path')
         self.nbScene=len(lstImg)
         lstImg.sort()
         self.argsInit+=lstImg
+        self.argsInit+=['--overlap-list', pathPairTxt,] # stereopair file for key point extraction
+            #OR
+        #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
         lstImgName=[os.path.basename(pathCur).split('.')[0] for pathCur in lstImg]
         self.lstTsaiName=[nameTsai1.format(nameCur) for nameCur in lstImgName]
         
-    def KeyPoints(self):
+    def KeyPoints(self, prefIn, prefOut):
         strInd=' '.join([str(i) for i in range(self.nbScene)])
         
         args=self.argsInit.copy()
-        prefImg=os.path.dirname(self.argsInit[-1])
-        args+= [os.path.join(prefImg,nameCur) for nameCur in self.lstTsaiName]
-        args+=['-o', self.dicPath['baKP']]
+        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
+        args+= [prefIn+nameCur for nameCur in self.lstTsaiName]
+        args+=['-o', prefOut]
         args+=[## Key points
-                '--overlap-list', self.dicPath['pPairs'], # stereopair file for key point extraction
-                #OR
-                #'--position-filter-dist', 'XXm', # image couple for key point based on centre distance
                 '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
                 '--min-matches', '10', # min key point pairs
                 '--ip-per-tile', '1000', # key point number
@@ -283,17 +282,16 @@ class BunAdjParam:
         
         return args
 
-    def EO(self):
+    def EO(self, prefIn, prefOut):
         args=self.argsInit.copy()
-        lstTsai=glob(self.dicPath['baKP']+'*.tsai')
+        lstTsai=glob(prefIn+'*.tsai')
         lstTsai.sort()
         args+= lstTsai
         args+=[## Key points
-                '--overlap-list', self.dicPath['pPairs'], # stereopair file for key point extraction
                 '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
-                '--heights-from-dem', self.dicPath['pDem'], # fix key point height from DSM
+                '--heights-from-dem', self.pathDem, # fix key point height from DSM
                 '--heights-from-dem-weight', '1', # weight of key point height from DSM
                 ## Model
                 #'--rotation-weight', '0', '--translation-weight', '0', # EO weight (x>0 -> stiffer)
@@ -312,28 +310,27 @@ class BunAdjParam:
                 # OR
                 #'--elevation-limit', 'min', 'max' # outlier filtering param
                 ]
-        args+=['-o', self.dicPath['baEO']]
+        args+=['-o', prefOut]
         
         return args
 
-    def IO(self):
+    def IO(self, prefIn, prefOut):
         args=self.argsInit.copy()
-        lstTsai= glob(self.dicPath['baEO']+'*.tsai')
+        lstTsai= glob(prefIn+'*.tsai')
         lstTsai.sort()
         args+= lstTsai
-        args.append(self.dicPath['baIO']+'*.gcp')
+        args.append(prefOut+'*.gcp')
         args+=[## Key points
-                '--overlap-list', self.dicPath['pPairs'], # stereopair file for key point extraction
                 '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former key points
                 '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
+                '--heights-from-dem', self.pathDem, # fix key point height from DSM
+                '--heights-from-dem-weight', '1', # weight of key point height from DSM
                 ## Model
                 #'--rotation-weight', '0', '--translation-weight', '0', # EO weight (x>0 -> stiffer)
                 # OR
                 #'--camera-weight', '1', # EO weight (x>1 -> stiffer)
                 #'--fixed-camera-indices', "'%s'"% ' '.join(lstInd), # fixed camera i
-                #'--heights-from-dem', 'pathDEM', # fix key point height from DSM
-                #'--heights-from-dem-weight', '10', # weight of key point height from DSM
                 ## Intrinsic imporvement
                 '--solve-intrinsics', # include IO in BA (default=False) 
                 #'--intrinsics-to-float', "'focal_length'", # list of IO param to solve
@@ -344,31 +341,27 @@ class BunAdjParam:
                 '--num-passes', '20', # iteration number
                 '--parameter-tolerance', '1e-2', # least square limite 
                 ]
-        args+=['-o', self.dicPath['baIO']]
+        args+=['-o', prefOut]
         args.remove('--save-cnet-as-csv')
 
         return args
 
 
-def CopyPrevBA(pathDict, stepIn, stepOut):
+def CopyPrevBA(prefIn, prefOut, gcp=False):
     '''
     
-    pathDict (dict): dict of all paths
-    stepIn (str <KP|EO|IO>): path selection
+    prefIn (str): path prefix input
+    prefOut (str): path prefix output
     out:
         0: folder creation
         OR
         1: skip 
     '''
-    if not 'ba'+stepIn in pathDict: SubLogger(logging.CRITICAL, 'Unknown step in')
-    prefIn=pathDict['ba'+stepIn]
-    if not 'ba'+stepOut in pathDict: SubLogger(logging.CRITICAL, 'Unknown step out')
-    prefOut=pathDict['ba'+stepOut]
-
+    
     dirOut=os.path.dirname(prefOut)
     if os.path.exists(dirOut): 
         SubLogger(logging.WARNING, '%s folder already exists (skipped)'% os.path.basename(prefOut))
-        return 1
+        return 0
     os.mkdir(dirOut)
 
     # Copy tif
@@ -380,13 +373,28 @@ def CopyPrevBA(pathDict, stepIn, stepOut):
     for pathCur in glob(prefIn+'*-clean.match'):
         cmd='cp %s %s'% (pathCur, pathCur.replace(prefIn,prefOut).replace('-clean',''))
         os.system(cmd)
-    #return 0
+    
     # Copy Gcp
-    if stepOut=='IO':
-        cmd='cp %s %s'% (prefIn+'-cnet.csv', prefOut+'-EO-cnet.gcp')
+    if gcp:
+        pathIn=prefIn+'-cnet.csv'
+        name=os.path.basename(pathIn).replace('csv', 'gcp')
+        cmd='cp %s %s'% (pathIn, prefOut+'-'+name)
         os.system(cmd)
-    return 0
+        
+    return 1
 
+def ExportCam(prefIn, prefOut):
+
+    from ASfM import nameTsai1, nameTsai2
+    extTsai1=nameTsai1.replace('{}', '')
+    extTsai2=nameTsai2.replace('{}', '')
+    if os.path.isdir(prefOut) and not prefOut.endswith('/'): prefOut+='/'
+    
+    for pathCur in glob(prefIn+'*'+extTsai1):
+        nameOut=os.path.basename(pathCur).strip('KPEIO-').replace(extTsai1,extTsai2)
+        pathOut=prefOut+nameOut
+        cmd='cp %s %s'% (pathCur, pathOut)
+        os.system(cmd)
 
     
 

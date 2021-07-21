@@ -9,6 +9,6 @@ Lib
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =[]
+__all__ =['MSSlib_asp', 'MSSlib_stereo']
 
 #  variables

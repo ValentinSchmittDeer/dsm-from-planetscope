@@ -2,8 +2,8 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
-from glob import glob
 from pprint import pprint
+from glob import glob
 
 # PyValLib packages
 from PVL.PVL_Logger import SetupLogger, ProcessStdout
@@ -12,8 +12,9 @@ from PVL.PVL_Rpc import *
 # dsm_from_planetscope libraries
 from SSBP.SSBPlib_block import SceneBlocks
 from PCT import *
-from ASfM.ASfMlib_asp import AspUtility as AspObj
-from ASfM import *
+
+from MSS.MSSlib_asp import AspUtility as AspObj
+from MSS import * 
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
@@ -32,12 +33,11 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-featIdTest=['20210328_151810_1020_1A_Analytic_DN.tif','20210328_151811_1020_1A_Analytic_DN.tif']
+
 
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-
 
 #=======================================================================
 #main
@@ -49,11 +49,12 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Retrieval of arguments
         #---------------------------------------------------------------
+        #Positional input
         parser.add_argument('-i', required=True, help='Working directory')
+        parser.add_argument('-m', required=True, help='Dense matching mode PW|MVS')
         parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
-
-
-        # Optional arguments
+        
+        #Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
 
         args = parser.parse_args()
@@ -63,10 +64,11 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
         if not os.path.isfile(args.dem): raise RuntimeError("DEM file not found")
+        if not args.m in ('PW', 'MVS'): raise RuntimeError("Unknown mode")
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
-        
+
         #---------------------------------------------------------------
         # Check planet_common and docker
         #---------------------------------------------------------------
@@ -90,83 +92,56 @@ if __name__ == "__main__":
         for iB in lstLoop:
             bId, nbFeat= objBlocks.lstBId[iB]
             logger.info(bId)
-            pathDict=ASfMlib_ba.BlockPathDict(args.i, bId, args.dem)
+            pathDict=MSSlib_stereo.BlockPathDict(args.i, bId)
             
-
-            #---------------------------------------------------------------
-            # Camera creation
-            #---------------------------------------------------------------
-            #logger.info('# Camera creation')
-            procBar=ProcessStdout(name='Scene and camera creation',inputCur=nbFeat)
-            for j in range(nbFeat):
-                if not j in (7, 8, 9, 13, 14, 15): continue
-                procBar.ViewBar(j)
-                
-                subArgs=ASfMlib_ba.CameraParam(pathDict, objBlocks.lstBFeat[iB][j])
-                asp.cam_gen(subArgs)
-
-                subArgs=ASfMlib_ba.ConvertCameraParam(pathDict, objBlocks.lstBFeat[iB][j])
-                asp.convert_pinhole_model(subArgs)
-                
-            print()
-
-            #---------------------------------------------------------------
-            # Orbit visualisation
-            #---------------------------------------------------------------
-            logger.info('# Orbit visualisation')
-            regexProcImg= os.path.join(pathDict['pProcData'], '*.tif')
-            regexProcCam= os.path.join(pathDict['pProcData'], nameTsai1.format('*'))
-            pathOut= os.path.join(pathDict['pB'],'%s_InitialCam.kml'% bId)
-            subArgs=(regexProcImg,
-                    regexProcCam,
-                    '-o', pathOut,
-                    )
-            if os.path.exists(pathOut): 
-                os.remove(pathOut)
-                logger.info('Overwrite %s'% os.path.basename(pathOut))
-            asp.orbitviz(subArgs)
             
             #---------------------------------------------------------------
-            # Bundle adjustment series
+            # Dense matching pairwise
             #---------------------------------------------------------------
-            pathPairTxt=ASfMlib_ba.StereoPairDescriptor(pathDict, objBlocks.lstBCouple[iB])
+            if args.m=='PW':
+                logger.info('# Dense matching pairwise')
 
-            argsCur=ASfMlib_ba.BunAdjParam(glob(regexProcImg), args.dem, pathPairTxt)
+                for i,pairCur in enumerate(objBlocks.lstBCouple[iB]):
+                    # Find Image
+                    lstImgPath=[]
+                    for key in pairCur['properties']:
+                        if not key.startswith('scene'): continue
+                        nameImg=pairCur['properties'][key]
+                        grepImg=os.path.join(pathDict['pProcData'], nameImg+'*.tif')
+                        lstImg=glob(grepImg)
+                        #if not len(lstImg)==1: raise RuntimeError('Image file not found (or multiple ones): %s'% nameImg)
+                        if lstImg:
+                            lstImgPath.append(lstImg[0])
+                    if not len(lstImgPath)==2: continue
+                    
+                    # Find the best Tsai
+                    lstCamPath=[]
+                    for pathImg in lstImgPath:
+                        lstCam=glob(pathImg.split('.')[0]+'*.tsai')
+                        if not lstCam: raise RuntimeError('Camera file (tsai) not found: %s'% pathImg)
+                        lstCam.sort()
+                        lstCamPath.append(lstCam[-1],)
+                    
+                    # Preparation
+                    MSSlib_stereo.OverlapMask(pairCur,lstImgPath[0],lstCamPath[0], args.dem,pathDict['pDm']+'-lMask.tif')
+                    MSSlib_stereo.OverlapMask(pairCur,lstImgPath[1],lstCamPath[1], args.dem,pathDict['pDm']+'-rMask.tif')
 
-            #---------------------------------------------------------------
-            # Key point extraction
-            #---------------------------------------------------------------
-            folderKP=os.path.dirname(pathDict['baKP'])
-            if not os.path.exists(folderKP):
-                logger.info('# Key point extraction')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.KeyPoints(pathDict['pProcData'], pathDict['baKP']))
+                    # Process
+                    subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
+                    asp.stereo(subArgs)
 
-            #---------------------------------------------------------------
-            # EO adjustment
-            #---------------------------------------------------------------
-            if ASfMlib_ba.CopyPrevBA(pathDict['baKP'], pathDict['baEO']):
-                logger.info('# EO adjustment')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.EO(pathDict['baKP'], pathDict['baEO']))
-                        
-            #---------------------------------------------------------------
-            # IO adjustment
-            #---------------------------------------------------------------
-            if ASfMlib_ba.CopyPrevBA(pathDict['baEO'], pathDict['baIO'], gcp=True):
-                logger.info('# IO adjustment')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.IO(pathDict['baEO'], pathDict['baIO']))
+                    subArgs=MSSlib_stereo.P2DParam(pathDict['pDm']+'-PC.tif')
+                    asp.point2dem(subArgs)
+                    #os.system('mv %s %s'% (pathDict['pDm']+'-DEM.tif', pathDict['pDm']+'%04i-DEM.tif'% i))
+                    #os.system('mv %s %s'% (pathDict['pDm']+'-IntersectionErr.tif', pathDict['pDm']+'%04i-IntersectionErr.tif'% i))
+                    input('-----')
+                    continue
+                    sys.exit()
             
-            ASfMlib_ba.ExportCam(pathDict['baIO'], pathDict['pProcData'])
-            
-            logger.warning("Normalise function name in ..._ba")
-
-
-
-        
-        
-        
+        #---------------------------------------------------------------
+        # Step
+        #---------------------------------------------------------------
+        logger.info('# Step')
         
     #---------------------------------------------------------------
     # Exception management

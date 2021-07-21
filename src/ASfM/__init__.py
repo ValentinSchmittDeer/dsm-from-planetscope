@@ -18,3 +18,5 @@ nameProcDataImg='{}_gB.tif' # matching with ASfMlib_ba.SingleBandImg process
 nameTsai0='{}_Dist0No.tsai'
 nameTsai1='{}_Dist1Rpc.tsai'
 nameTsai2='{}_Dist2Adj.tsai'
+
+namePairDescip='{}_StereoPairs.txt'
