@@ -36,7 +36,7 @@ class AspUtility():
     
         checkDocker=False
         i=0
-        while i<len(outCmd) and not checkDocker:
+        while i<len(outCmd)-1 and not checkDocker:
             i+=1
             lineCur=outCmd[i]
             if lineCur.strip().split()[0]=='us.gcr.io/planet-ci-prod/stereo_docker2':
@@ -61,14 +61,14 @@ class AspUtility():
         return 0
 
     def stereo(self, subArgs):
-        #fun='parallel_stereo'
-        fun='stereo'
+        fun='parallel_stereo'
+        #fun='stereo'
         if self.ValidArgs(subArgs): return 1
         strCmd=fun+' '
         strCmd+=' '.join(subArgs)
         ####
         print(self.aspCmd+strCmd)
-        #os.system(self.aspCmd+strCmd)
+        os.system(self.aspCmd+strCmd)
         return 0
         ####
         out=os.popen(self.aspCmd+strCmd)
@@ -84,7 +84,7 @@ class AspUtility():
         strCmd+=' '.join(subArgs)
         ####
         print(self.aspCmd+strCmd)
-        #os.system(self.aspCmd+strCmd)
+        os.system(self.aspCmd+strCmd)
         return 0
         ####
         out=os.popen(self.aspCmd+strCmd)

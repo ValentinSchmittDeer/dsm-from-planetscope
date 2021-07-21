@@ -4,7 +4,7 @@
 import os, sys
 import json
 import logging
-from math import pi, sin, cos
+from math import pi, sin, cos, ceil
 from glob import glob
 import numpy as np
 from numpy.linalg import inv
@@ -88,13 +88,15 @@ def Geo2Cart_Elli(ptGeo,elliAF=WGS84):
     
     return np.array([x,y,z]).reshape(3,1)
 
-def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut):
+def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut, margin=10):
     '''
+    Caution: image unit is assumed to be pixel, check in case of mm camera model
     '''
     if not os.path.exists(pathImg): SubLogger(logging.CRITICAL, 'Image not found: %s'% pathImg)
     if not os.path.exists(pathCam): SubLogger(logging.CRITICAL, 'Camera file not found: %s'% pathCam)
     
     from rasterio import features
+    from scipy.ndimage.morphology import binary_dilation
     from MSS.MSSlib_asp import ObjTsai
 
     # Read DTM
@@ -110,7 +112,7 @@ def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut):
     geomIn=descrip['geometry']['coordinates'][0]
     
     # Vector projection
-    geomOut=[]
+    geomImg=[]
     for ptIn in geomIn:
         ptZ=frameDem[imgDem.index(ptIn[0], ptIn[1])]
         pt3D=Geo2Cart_Elli(ptIn+[ptZ])
@@ -118,32 +120,34 @@ def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut):
         
         ptImg_h=camIn['matP_h']@pt3D_h
         ptImg=(ptImg_h[:2]/ptImg_h[2]).flatten()
-        geomOut.append(tuple(ptImg))
+        geomImg.append(list(ptImg))
 
     del frameDem
     imgDem.close()
-    
+    geomMask={"type": 'Polygon', 'coordinates': [list(geomImg)]}
+
     # Image part
     with rasterio.open(pathImg) as srcImg:
         profileOut = srcImg.profile
     profileOut['dtype']=np.dtype('uint8')
+    profileOut['driver']='tiff'
     shapeOut=(profileOut['height'], profileOut['width'])
-    print(geomOut)
-    import matplotlib.pyplot as plt
-    fig, graph = plt.subplots(1,1)
     
-    camX=(0, shapeOut[1], shapeOut[1], 0, 0)
-    camY=(0, 0, -shapeOut[0], -shapeOut[0], 0)
-    graph.plot(camX,camY,'k',label='')
+    matMask=features.geometry_mask((geomMask,), shapeOut, profileOut['transform'], all_touched=True, invert=True)
+    matMaskLarg=binary_dilation(matMask, np.ones([2*margin+1,2*margin+1])).astype(int)
     
+    try:
+        with rasterio.open(pathOut, 'w', **profileOut) as dstImg:
+            dstImg.write(matMaskLarg*255,1)
+    except :
+        pass # this is due to georeferencement used by GDAL and rasterio
     
-    plt.show()
-    sys.exit()
+    # Correlation tile size
+    bbox=features.bounds(geomMask)
+    tileSize=(ceil(min(bbox[3]+margin,shapeOut[0])-max(bbox[1]-margin,0)), # height,
+              ceil(min(bbox[2]+margin,shapeOut[1])-max(bbox[0]-margin,0))) # width
 
-    #matMask=np.zeros(profileOut['height'], profileOut['width'])
-    features.geometry_mask(geometries, shapeOut, transform, all_touched=True, invert=True)
-    sys.exit()
-    return tilesize
+    return tileSize
 
 
 def StereoParam(lstImg, lstTsai, prefOut):
@@ -152,7 +156,8 @@ def StereoParam(lstImg, lstTsai, prefOut):
             '-t', 'nadirpinhole',
             #'-e', '1', # starting point into the full (Preprocessing), (Disparity), (Blend), (Sub-pixel Refinement), (Outlier Rejection and Hole Filling), (Triangulation)
             '--alignment-method', 'none', # skip the additionall alignement
-            '--stereo-algorithm', '1',
+            '--stereo-algorithm', '1', # 1:SGM, 2:MGM
+            #'--corr-tile-size', 
             lstImg[0],
             lstImg[1],
             lstTsai[0],

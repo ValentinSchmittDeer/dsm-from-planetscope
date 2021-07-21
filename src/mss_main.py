@@ -56,6 +56,7 @@ if __name__ == "__main__":
         
         #Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
+        parser.add_argument('-debug',action='store_true',help='Debug mode: avoid planet_common check')
 
         args = parser.parse_args()
         
@@ -72,10 +73,11 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Check planet_common and docker
         #---------------------------------------------------------------
-        logger.info('# Check planet_common and docker ')
-        if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
-        
-        asp=AspObj()
+        if not args.debug:
+            logger.info('# Check planet_common and docker ')
+            if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
+            
+            asp=AspObj()
         
         #---------------------------------------------------------------
         # Read Repo
@@ -123,9 +125,12 @@ if __name__ == "__main__":
                         lstCamPath.append(lstCam[-1],)
                     
                     # Preparation
-                    MSSlib_stereo.OverlapMask(pairCur,lstImgPath[0],lstCamPath[0], args.dem,pathDict['pDm']+'-lMask.tif')
-                    MSSlib_stereo.OverlapMask(pairCur,lstImgPath[1],lstCamPath[1], args.dem,pathDict['pDm']+'-rMask.tif')
-
+                    if not os.path.exists(os.path.dirname(pathDict['pDm'])): os.mkdir(os.path.dirname(pathDict['pDm']))
+                    tileSize1=MSSlib_stereo.OverlapMask(pairCur,lstImgPath[0],lstCamPath[0], args.dem,pathDict['pDm']+'-lMask.tif')
+                    tileSize2=MSSlib_stereo.OverlapMask(pairCur,lstImgPath[1],lstCamPath[1], args.dem,pathDict['pDm']+'-rMask.tif')
+                    tileSize=(max(tileSize1[0],tileSize2[0]),
+                              max(tileSize1[1],tileSize2[1]))
+                    
                     # Process
                     subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
                     asp.stereo(subArgs)
