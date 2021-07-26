@@ -100,54 +100,102 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             # Dense matching pairwise
             #---------------------------------------------------------------
-            if args.m=='PW':
-                logger.info('# Dense matching pairwise')
+            logger.info('# Dense matching')
 
-                for i,pairCur in enumerate(objBlocks.lstBCouple[iB]):
-                    # Find Image
-                    lstImgPath=[]
-                    for key in pairCur['properties']:
-                        if not key.startswith('scene'): continue
-                        nameImg=pairCur['properties'][key]
-                        grepImg=os.path.join(pathDict['pProcData'], nameImg+'*.tif')
-                        lstImg=glob(grepImg)
-                        #if not len(lstImg)==1: raise RuntimeError('Image file not found (or multiple ones): %s'% nameImg)
-                        if lstImg:
-                            lstImgPath.append(lstImg[0])
-                    if not len(lstImgPath)==2: continue
-                    
-                    # Find the best Tsai
-                    lstCamPath=[]
-                    for pathImg in lstImgPath:
-                        lstCam=glob(pathImg.split('.')[0]+'*.tsai')
-                        if not lstCam: raise RuntimeError('Camera file (tsai) not found: %s'% pathImg)
-                        lstCam.sort()
-                        lstCamPath.append(lstCam[-1],)
-                    
-                    # Preparation
-                    if not os.path.exists(os.path.dirname(pathDict['pDm'])): os.mkdir(os.path.dirname(pathDict['pDm']))
-                    tileSize1=MSSlib_stereo.OverlapMask(pairCur,lstImgPath[0],lstCamPath[0], args.dem,pathDict['pDm']+'-lMask.tif')
-                    tileSize2=MSSlib_stereo.OverlapMask(pairCur,lstImgPath[1],lstCamPath[1], args.dem,pathDict['pDm']+'-rMask.tif')
-                    tileSize=(max(tileSize1[0],tileSize2[0]),
-                              max(tileSize1[1],tileSize2[1]))
-                    
-                    # Process
-                    subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
-                    asp.stereo(subArgs)
+            for i,pairCur in enumerate(objBlocks.lstBCouple[iB]):
+                if not i==580: continue
+                #---------------------------------------------------------------
+                # Find Images
+                #---------------------------------------------------------------
+                lstImgId=[pairCur['properties'][key] for key in pairCur['properties'] if key.startswith('scene')]
+                lstOfLst=[glob(os.path.join(pathDict['pProcData'], idCur+'*.tif')) for idCur in lstImgId]
+                lstImgPath=[lst[0] for lst in lstOfLst if lst]
+                if not len(lstImgPath)==2: continue
+                
+                #---------------------------------------------------------------
+                # More images
+                #---------------------------------------------------------------
+                if args.m=='MVS':
+                    lstFuthImgId=MSSlib_stereo.MvsAddImg(pairCur, objBlocks.lstBCouple[iB])
+                    lstOfLst=[glob(os.path.join(pathDict['pProcData'], idCur+'*.tif')) for idCur in lstFuthImgId]
+                    lstImgPath+=[lst[0] for lst in lstOfLst if lst]
+                    print(len(lstImgPath), lstImgPath)
 
-                    subArgs=MSSlib_stereo.P2DParam(pathDict['pDm']+'-PC.tif')
-                    asp.point2dem(subArgs)
-                    #os.system('mv %s %s'% (pathDict['pDm']+'-DEM.tif', pathDict['pDm']+'%04i-DEM.tif'% i))
-                    #os.system('mv %s %s'% (pathDict['pDm']+'-IntersectionErr.tif', pathDict['pDm']+'%04i-IntersectionErr.tif'% i))
-                    input('-----')
+                #---------------------------------------------------------------
+                # Find the best Tsai
+                #---------------------------------------------------------------
+                lstCamPath=[]
+                for pathImg in lstImgPath:
+                    lstCam=glob(pathImg.split('.')[0]+'*.tsai')
+                    if not lstCam: raise RuntimeError('Camera file (tsai) not found: %s'% pathImg)
+                    lstCam.sort()
+                    lstCamPath.append(lstCam[-1],)
+                
+                print(lstCamPath)
+                input('GO?')
+                #---------------------------------------------------------------
+                # Preparation
+                #---------------------------------------------------------------
+                '''
+                There are 2 options:
+                    alignment-method epipolar> +: make use of input geometry -: must shrink the mask
+                    alignment-method affineepipolar> +: automatic relvant mask, better result -: transfo based on new key points
+                '''
+                #subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
+                #asp.stereo_pprc(subArgs)
+                #input('pprc OK')
+                #if not os.path.exists(os.path.dirname(pathDict['pDm'])): 
+                #    logger.error('preparation step failed: %i'% i)
+                #    cmd='rm -r %s*'% pathDict['pDm']
+                #    os.system(cmd)
+                #    continue
+                #tileSize1=MSSlib_stereo.OverlapMask(pairCur, pathDict['pDm']+'-lMask.tif', pathDict['pDm']+'-L.tsai', args.dem)
+                #tileSize2=MSSlib_stereo.OverlapMask(pairCur, pathDict['pDm']+'-rMask.tif', pathDict['pDm']+'-R.tsai', args.dem)
+                #
+                #cmd='rm %s*_sub.tif'% pathDict['pDm']
+                #os.system(cmd)
+                #input('mask OK')
+                
+                #---------------------------------------------------------------
+                # Process
+                #---------------------------------------------------------------
+                subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
+                print(subArgs)
+                asp.stereo(subArgs)
+                #input('stereo OK')
+                if not os.path.exists(pathDict['pDm']+'-PC.tif'): 
+                    cmd='rm -r %s*'% pathDict['pDm']
+                    os.system(cmd)
                     continue
-                    sys.exit()
+                subArgs=MSSlib_stereo.P2DParam(pathDict['pDm']+'-PC.tif')
+                asp.point2dem(subArgs)
+                #input('dem OK')
+                
+                #---------------------------------------------------------------
+                # Save Process
+                #---------------------------------------------------------------
+                perfOut=os.path.join(os.path.dirname(pathDict['pDm']),'ResDM')
+                for nameIn in ('-DEM.tif', '-IntersectionErr.tif', '-GoodPixelMap.tif', '-F.tif'):
+                    pathIn=pathDict['pDm']+nameIn
+                    if not os.path.exists(pathIn): 
+                        logger.error('File not found (%s): pair %i'% (nameIn, i))
+                    else:
+                        cmd='mv {} {}'.format(pathIn, 
+                                                    perfOut+nameIn.replace('.', '-%i.'% i)
+                                                    )
+                        #print(cmd)
+                        os.system(cmd)
+
+                input('next OK')
+                
+                #---------------------------------------------------------------
+                # Clean folder
+                #---------------------------------------------------------------
+                cmd='rm -r %s*'% pathDict['pDm']
+                #print(cmd)
+                os.system(cmd)
             
-        #---------------------------------------------------------------
-        # Step
-        #---------------------------------------------------------------
-        logger.info('# Step')
-        
+
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------

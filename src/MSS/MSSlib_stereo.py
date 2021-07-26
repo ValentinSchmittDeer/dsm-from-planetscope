@@ -9,6 +9,8 @@ from glob import glob
 import numpy as np
 from numpy.linalg import inv
 import rasterio
+from shapely.geometry import Polygon
+
 from pprint import pprint
 
 from PVL.PVL_Logger import SetupLogger, SubLogger
@@ -88,11 +90,11 @@ def Geo2Cart_Elli(ptGeo,elliAF=WGS84):
     
     return np.array([x,y,z]).reshape(3,1)
 
-def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut, margin=10):
+def OverlapMask(descrip, pathMask, pathCam, pathDem, margin=10):
     '''
     Caution: image unit is assumed to be pixel, check in case of mm camera model
     '''
-    if not os.path.exists(pathImg): SubLogger(logging.CRITICAL, 'Image not found: %s'% pathImg)
+    if not os.path.exists(pathMask): SubLogger(logging.CRITICAL, 'Mask image not found: %s'% pathMask)
     if not os.path.exists(pathCam): SubLogger(logging.CRITICAL, 'Camera file not found: %s'% pathCam)
     
     from rasterio import features
@@ -126,21 +128,16 @@ def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut, margin=10):
     imgDem.close()
     geomMask={"type": 'Polygon', 'coordinates': [list(geomImg)]}
 
-    # Image part
-    with rasterio.open(pathImg) as srcImg:
+    # Image part: using rasterio for not georef image returns warnings
+    with rasterio.open(pathMask) as srcImg:
         profileOut = srcImg.profile
-    profileOut['dtype']=np.dtype('uint8')
-    profileOut['driver']='tiff'
     shapeOut=(profileOut['height'], profileOut['width'])
     
     matMask=features.geometry_mask((geomMask,), shapeOut, profileOut['transform'], all_touched=True, invert=True)
-    matMaskLarg=binary_dilation(matMask, np.ones([2*margin+1,2*margin+1])).astype(int)
+    matMaskLarg=binary_dilation(matMask, np.ones([2*margin+1,2*margin+1])).astype('uint8')
     
-    try:
-        with rasterio.open(pathOut, 'w', **profileOut) as dstImg:
-            dstImg.write(matMaskLarg*255,1)
-    except :
-        pass # this is due to georeferencement used by GDAL and rasterio
+    with rasterio.open(pathMask, 'w', **profileOut) as dstImg:
+        dstImg.write(matMaskLarg*255,1)
     
     # Correlation tile size
     bbox=features.bounds(geomMask)
@@ -149,21 +146,23 @@ def OverlapMask(descrip, pathImg, pathCam, pathDem, pathOut, margin=10):
 
     return tileSize
 
-
 def StereoParam(lstImg, lstTsai, prefOut):
     # Arguments
     subArgs=['--skip-rough-homography',
             '-t', 'nadirpinhole',
             #'-e', '1', # starting point into the full (Preprocessing), (Disparity), (Blend), (Sub-pixel Refinement), (Outlier Rejection and Hole Filling), (Triangulation)
-            '--alignment-method', 'none', # skip the additionall alignement
-            '--stereo-algorithm', '1', # 1:SGM, 2:MGM
-            #'--corr-tile-size', 
-            lstImg[0],
-            lstImg[1],
-            lstTsai[0],
-            lstTsai[1],
-            prefOut,
+            '--alignment-method', 'affineepipolar', # affineepipolar|homography|epipolar|none: makes uses of initial adjustmet
+            '--stereo-algorithm', '1', # 1:SGM (needs parallel_stereo), 2:MGM
+            #'--corr-tile-size',
+            '--individually-normalize',
+            '--ip-detect-method', '1', # stereo_corr coarse correlation: key point algo
+            #'--prefilter-mode',
+            #'disparity map initialization' #1:box filter-like accumulator; 2:coarse-to-fine pyramid based; 3:disparity search space into sub-regions with similar values of disparity
             ]
+    subArgs+=lstImg
+    subArgs+=lstTsai
+    subArgs.append(prefOut)
+
     return subArgs
 
 def P2DParam(pathPCIn):
@@ -175,6 +174,21 @@ def P2DParam(pathPCIn):
             pathPCIn,
             ]
     return subArgs
+
+def MvsAddImg(descrip, lstDescrip):
+    # Vector reading
+    geomIn=Polygon(descrip['geometry']['coordinates'][0])
+    lstIdIn=[descrip['properties'][key] for key in descrip['properties'] if key.startswith('scene')]
+    
+    lstIdNew=[]
+    for descripCur in lstDescrip:
+        if not descripCur['geometry']['type']=='Polygon': continue
+        geomNew=Polygon(descripCur['geometry']['coordinates'][0])
+        if not geomNew.intersects(geomIn): continue
+        newId=[descripCur['properties'][key] for key in descrip['properties'] if key.startswith('scene')]
+        lstIdNew+=[idCur for idCur in newId if not idCur in lstIdIn and not idCur in lstIdNew]
+    
+    return lstIdNew
 
 SubLogger(logging.WARNING, 'jojo')
 
