@@ -103,7 +103,8 @@ if __name__ == "__main__":
             logger.info('# Dense matching')
 
             for i,pairCur in enumerate(objBlocks.lstBCouple[iB]):
-                if not i==580: continue
+                if not i==487: continue
+
                 #---------------------------------------------------------------
                 # Find Images
                 #---------------------------------------------------------------
@@ -119,7 +120,6 @@ if __name__ == "__main__":
                     lstFuthImgId=MSSlib_stereo.MvsAddImg(pairCur, objBlocks.lstBCouple[iB])
                     lstOfLst=[glob(os.path.join(pathDict['pProcData'], idCur+'*.tif')) for idCur in lstFuthImgId]
                     lstImgPath+=[lst[0] for lst in lstOfLst if lst]
-                    print(len(lstImgPath), lstImgPath)
 
                 #---------------------------------------------------------------
                 # Find the best Tsai
@@ -131,7 +131,9 @@ if __name__ == "__main__":
                     lstCam.sort()
                     lstCamPath.append(lstCam[-1],)
                 
-                print(lstCamPath)
+                print(i, ':', len(lstImgPath), '--', len(lstCamPath))
+                pprint(lstImgPath)
+                #continue
                 input('GO?')
                 #---------------------------------------------------------------
                 # Preparation
@@ -167,9 +169,12 @@ if __name__ == "__main__":
                     cmd='rm -r %s*'% pathDict['pDm']
                     os.system(cmd)
                     continue
+                
                 subArgs=MSSlib_stereo.P2DParam(pathDict['pDm']+'-PC.tif')
                 asp.point2dem(subArgs)
-                #input('dem OK')
+                subArgs=MSSlib_stereo.P2LParam(pathDict['pDm']+'-PC.tif')
+                asp.point2las(subArgs)
+                input('dem OK')
                 
                 #---------------------------------------------------------------
                 # Save Process

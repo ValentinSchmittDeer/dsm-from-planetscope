@@ -108,6 +108,23 @@ class AspUtility():
         with open(pathOut, 'w') as fileOut:
             fileOut.writelines(out)
         return 0
+
+    def point2las(self, subArgs):
+        fun='point2las'
+        if self.ValidArgs(subArgs): return 1
+        strCmd=fun+' '
+        strCmd+=' '.join(subArgs)
+        ####
+        print(self.aspCmd+strCmd)
+        os.system(self.aspCmd+strCmd)
+        return 0
+        ####
+        out=os.popen(self.aspCmd+strCmd)
+        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
+        with open(pathOut, 'w') as fileOut:
+            fileOut.writelines(out)
+        return 0
+
 #SubLogger(logging.WARNING, 'jojo')
 
 def ObjTsai(pathIn):

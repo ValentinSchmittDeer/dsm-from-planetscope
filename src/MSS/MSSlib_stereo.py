@@ -170,8 +170,17 @@ def P2DParam(pathPCIn):
     subArgs=['--transverse-mercator',
             '--nodata-value', '-32767',
             '--t_srs', 'EPSG:32611',
-            '--errorimage', 
+            ' ', 
             pathPCIn,
+            ]
+    return subArgs
+
+def P2LParam(pathPCIn):
+    # Arguments
+    subArgs=['--datum', 'WGS84', 
+            '--t_srs', 'EPSG:32611', 
+            pathPCIn,
+            '-o', pathPCIn.replace('.tif','.las')
             ]
     return subArgs
 
