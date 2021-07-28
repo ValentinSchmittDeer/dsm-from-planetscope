@@ -7,12 +7,12 @@ import json
 from datetime import datetime
 from shutil import copy2
 
-# PyValLib packages
-from PVL.PVL_Logger import SetupLogger, PrintPsItem
-
 # dsm_from_planetscope libraries
-import lib_auth
+from OutLib.LoggerFunc import *
+from VarCur import *
 from SSBP import *
+from PCT.dataFunc import CheckPC
+from PCT import metaDFunc
 
 #-------------------------------------------------------------------
 # Usage
@@ -73,7 +73,7 @@ def Main(args):
             checkSearch=False
         else:
             checkSearch=True
-            nameSearch=nameOutFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
+            nameSearch=nameSearchFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
             nameAoiOut=nameAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
                 
         if not os.path.isdir(args.o): raise RuntimeError("-o working directory not found")
@@ -93,9 +93,7 @@ def Main(args):
         
         if False in [instCur in lstInst for instCur in args.inst]: raise RuntimeError("-inst must be <PS2|PS2.SD|PSB.SD>")
 
-        if not args.b in lstBMethod: raise RuntimeError("-b must be one of %s"% str(lstBMethod))
-        if not args.f in lstBFilter: raise RuntimeError("-f must be one of %s"% str(lstBFilter))
-        
+        if not args.b in methodB: raise RuntimeError("-b must be one of %s"% str(methodB))        
 
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
@@ -109,12 +107,12 @@ def Main(args):
             # Setup Auth
             #---------------------------------------------------------------
             logger.info('# Setup Auth')
-            session=lib_auth.PlAuth()
+            session=searchFunc.PlAuth()
             
             #---------------------------------------------------------------
             # Filter creation
             #---------------------------------------------------------------
-            logger.info('# Filter creation ')
+            logger.info('# Strict Filtering')
             
             jsonParam=vars(args).copy()
             for keyCur in list(jsonParam.keys()):
@@ -122,13 +120,13 @@ def Main(args):
             
             jsonParam['geom']=featAoi
 
-            filterJson=SSBPlib_search.MakeFiter(jsonParam,nameSearch)
+            filterJson=searchFunc.MakeFiter(jsonParam,nameSearch)
             
             #---------------------------------------------------------------
             # Fire off request
             #---------------------------------------------------------------
             logger.info('# Fire off request ')
-            lstFeat=SSBPlib_search.PostRequest(session, filterJson)
+            lstFeat=searchFunc.PostRequest(session, filterJson)
 
             #PrintPsItem(lstFeat)
 
@@ -143,41 +141,76 @@ def Main(args):
 
             pathOut=pathOut.replace('json','geojson')
             with open(pathOut,'w') as fileOut:
-                objOut=basicGeojson
+                objOut=tempGeojson.copy()
                 objOut['name']=nameSearch
                 objOut['features']=lstFeat.copy()
                 fileOut.write(json.dumps(objOut, indent=2))
 
-
-        
         logger.info('%i found scenes'% len(lstFeat))
         
         #---------------------------------------------------------------
         # Block creation
         #---------------------------------------------------------------
         logger.info('# Block creation')
-        objBlocks=SSBPlib_block.SceneBlocks(lstFeat, args.o, args.b)
+        objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, args.b)
         logger.info(objBlocks)
         
         #---------------------------------------------------------------
-        # Block filtering
+        # Block first filtering
         #---------------------------------------------------------------
-        logger.info('# Block filtering')
-        objBlocks.FilterBlock(args.f)
-        logger.error('read extended MD and stor them in Json file')
-        logger.error('compute B/H from sat_az and sat_elev')
-        logger.info(objBlocks)
+        if args.fFP:
+            logger.info('# Block first filtering')
+            objBlocks=filterFunc.FilterBlock(objBlocks, 'fp')
+            logger.info(objBlocks)
+
+        #---------------------------------------------------------------
+        # Include Ext MD
+        #---------------------------------------------------------------
+        if args.extMD:
+            logger.info('# Include Ext MD')
+            if CheckPC():
+                logger.error('read extended MD and stor them in Json file')
+                #metaDFunc...
+                logger.info(objBlocks)
+            else:
+                logger.error('The extended metadata retrieval needs planet_common env and it is not accessible. You can use -extMD to stop reading extended MD and -fBH to stop the B/H filtering (which needs B/H info from extended MD). The process will continue without extended MD and B/H filtering')
+                args.extMD=False
+                args.fBH=False
+        
+        #---------------------------------------------------------------
+        # Scene coupling
+        #---------------------------------------------------------------
+        logger.info('# Scene coupling')
         objBlocks.StereoCoupling()
-        objBlocks.Coverage(featAoi)
+        logger.info(objBlocks)
         
+        #---------------------------------------------------------------
+        # Block Coverage
+        #---------------------------------------------------------------
+        if args.cove:
+            logger.info('# Block Coverage')
+            objBlocks.Coverage(featAoi)
+            logger.info(objBlocks)
 
         #---------------------------------------------------------------
         # Block storage
         #---------------------------------------------------------------
         logger.info('# Block storage')
-        objBlocks.WriteBlocks()
-        #pprint(objBlocks.__dir__())
+        #objBlocks.WriteBlocks()
         
+        ###
+        #sys.exit()
+        logger.warning('At this point, a reduced version of the block is available, go for B/H selection now')
+        #objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
+        #logger.info(objBlocks)
+        #---------------------------------------------------------------
+        # Block B/H filtering
+        #---------------------------------------------------------------
+        if args.fBH:
+            logger.info('# Block B/H filtering')
+            objBlocks=filterFunc.FilterBlock(objBlocks, 'bh')
+        
+
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------
@@ -194,12 +227,18 @@ if __name__ == "__main__":
         parser.add_argument('-i', required=True, help='Input geometry (geojson)')
         parser.add_argument('-o', required=True, help='Working directory for outputs')
 
-        # Block parameters
-        parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
-        parser.add_argument('-f', default='fp', help='Block filtering mode <fp|> (default: fp=footprint)')
-
         # Optional search parameters
         parser.add_argument('-iSrch', help='Input former search result (json), cancels another search step')
+        
+        # Block parameters
+        parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
+        parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: True)')
+        parser.add_argument('-fFP', action='store_false', help='Footprint filtering (default: True)')
+        parser.add_argument('-fBH', action='store_true', help='B/H filtering (default: False)')
+        parser.add_argument('-cove', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
+        
+
+        # Database search strict parameters
         parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
         parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
         parser.add_argument('-cloudUnder', type=int, default=0.1, help='Maximum cloud coverage %% integer')

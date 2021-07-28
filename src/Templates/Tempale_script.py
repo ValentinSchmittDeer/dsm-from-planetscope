@@ -4,11 +4,9 @@
 import os, sys, argparse, time
 from pprint import pprint
 
-# PyValLib packages
-from PVL.PVL_Logger import SetupLogger, ProcessStdout
-from PVL.PVL_Rpc import *
-
 # dsm_from_planetscope libraries
+from OutLib.LoggerFunc import *
+from VarCur import *
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------

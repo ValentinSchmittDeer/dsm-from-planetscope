@@ -1,38 +1,24 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: UTF-8 -*-'''
 
 import os, sys
-import requests
-import logging
-from PVL.PVL_Logger import SetupLogger, SubLogger
+import json
+from OutLib.LoggerFunc import *
 
 #-----------------------------------------------------------------------
-# Hard arguments
+# Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['PlAuth',]
+__all__ =[]
 SetupLogger(name=__name__)
-
-
+#SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def PlAuth():
-    '''
-    Create python web session using the env var $PL_API_KEY.
-    The env var can be added in ~/.bashrc: export PL_API_KEY='xxx'
 
-    out:
-        session (request obj): active session
-    ''' 
-    PLANET_API_KEY = os.getenv('PL_API_KEY')
-    if not PLANET_API_KEY: SubLogger(logging.CRITICAL, '$PL_API_KEY not found in .bashrc')
 
-    session = requests.Session()
-    session.auth = (PLANET_API_KEY, '')
 
-    return session
 #=======================================================================
 #main
 #-----------------------------------------------------------------------

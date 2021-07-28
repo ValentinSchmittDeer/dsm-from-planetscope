@@ -3,19 +3,38 @@
 
 import os, sys
 import json
-from PVL.PVL_Logger import SetupLogger, SubLogger
+import requests
+
+from OutLib.LoggerFunc import *
+from VarCur import *
 
 #-----------------------------------------------------------------------
 # Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['MakeFiter', 'PostRequest']
+__all__ =['PlAuth', 'MakeFiter', 'PostRequest']
 SetupLogger(name=__name__)
-
+#SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
+def PlAuth():
+    '''
+    Create python web session using the env var $PL_API_KEY.
+    The env var can be added in ~/.bashrc: export PL_API_KEY='xxx'
+
+    out:
+        session (request obj): active session
+    ''' 
+    PLANET_API_KEY = os.getenv('PL_API_KEY')
+    if not PLANET_API_KEY: SubLogger('CRITICAL', '$PL_API_KEY not found in .bashrc')
+
+    session = requests.Session()
+    session.auth = (PLANET_API_KEY, '')
+
+    return session
+
 def MakeFiter(argsDic,nameSearch):
     '''
     Create API filter based on past in parameters
@@ -32,7 +51,7 @@ def MakeFiter(argsDic,nameSearch):
 
     for key in argsDic:
         if key=='geom':
-            if not len(argsDic[key]['features'])==1: SubLogger(logging.CRITICAL, 'Only 1 feature is managened in geometry file for the moment')
+            if not len(argsDic[key]['features'])==1: SubLogger('CRITICAL', 'Only 1 feature is managened in geometry file for the moment')
             filterNew={"type": "GeometryFilter",
                     "field_name": "geometry"}
 
@@ -102,7 +121,7 @@ def MakeFiter(argsDic,nameSearch):
                         }
 
         else:
-            SubLogger(logging.CRITICAL, 'Unknown key %s'% key)
+            SubLogger('CRITICAL', 'Unknown key %s'% key)
 
         filterOut['filter']['config'].append(filterNew)
 
@@ -120,11 +139,10 @@ def PostRequest(sessionCur, jsonFilter):
         OR
         error (int): {1: 'Abort request', 2: 'Empty response'}
     '''
-    from SSBP import urlSearch,pageSize
     objSearchResult = sessionCur.post(urlSearch,
                                 json=jsonFilter)
      
-    if not objSearchResult.status_code==200: SubLogger(logging.CRITICAL, 'Aborted request\n'+json.dumps(objSearchResult.json(), indent=2))
+    if not objSearchResult.status_code==200: SubLogger('CRITICAL', 'Aborted request\n'+json.dumps(objSearchResult.json(), indent=2))
         
     searchResult=objSearchResult.json()
     
@@ -146,7 +164,7 @@ def PostRequest(sessionCur, jsonFilter):
         urlPage = pageResult["_links"].get("_next")
 
     print()
-    if not lstFeat: SubLogger(logging.CRITICAL, 'Empty response')
+    if not lstFeat: SubLogger('CRITICAL', 'Empty response')
     return lstFeat
 
 #=======================================================================

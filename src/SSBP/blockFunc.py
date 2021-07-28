@@ -6,11 +6,16 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 import numpy as np
 import json
+from glob import glob
 from shapely.geometry import Polygon
 import rasterio
+from rasterio.features import geometry_mask
+from rasterio.transform import from_origin
+from rasterio.crs import CRS
 
+from OutLib.LoggerFunc import *
+from VarCur import *
 
-from PVL.PVL_Logger import SetupLogger, SubLogger, ProcessStdout
 from pprint import pprint
 
 #-----------------------------------------------------------------------
@@ -20,7 +25,7 @@ __author__='Valentin Schmitt'
 __version__=1.0
 __all__=['SceneBlocks', 'Date2Int', 'SimplifyGeom']
 SetupLogger(name=__name__)
-
+#SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
@@ -54,18 +59,17 @@ class SceneBlocks():
         '''
         self.nbFeat=len(lstIn)
         self.method=meth
-        if not os.path.isdir(pathOut): SubLogger(logging.CRITICAL, 'pathOut must be a directory')
+        if not os.path.isdir(pathOut): SubLogger('CRITICAL', 'pathOut must be a directory')
         self.dirOut=pathOut
 
         if meth=='one':
             self.Build_One(lstIn)
         elif meth=='month':
-            SubLogger(logging.ERROR, 'create block from best B/H per ground unit (10m) amoung big dataset')
             self.Build_Month(lstIn)
         elif meth=='dir':
             self.Build_Dir()
         else:
-            SubLogger(logging.CRITICAL, 'Unknown block method (%s)'% meth)
+            SubLogger('CRITICAL', 'Unknown block method (%s)'% meth)
 
     def __str__(self):
         return '\n\t\t'.join(['Block List:', '(Block ID, Feature number)']+[str(tu) for tu in self.lstBId])
@@ -98,7 +102,7 @@ class SceneBlocks():
                                                     .replace('-','')
                                   )
         nameB=nameBlock.format(dateB)
-        SubLogger(logging.INFO, nameB)
+        SubLogger('INFO', nameB)
         self.lstBFeat=lstIn
         self.lstBId=[(nameB, 
                     self.nbFeat)]
@@ -116,8 +120,6 @@ class SceneBlocks():
                 lstBFeat (list with json): list with feature decription
                 nbB (int): number of created block  
         '''
-        from SSBP import nameBlock
-
         lstSceneDate=[datetime.strptime(\
                         feat\
                             ['properties']\
@@ -126,34 +128,25 @@ class SceneBlocks():
                                         .ljust(26, '0'),
                                         '%Y-%m-%dT%H:%M:%S.%f')\
                                         for feat in lstIn]
-        lstSceneDate.sort()
-        
+        lstDateTag=[Date2Int(dateCur) for dateCur in lstSceneDate]
+                                        
         # Scene clustering
-        monthCur=Date2Int(lstSceneDate[0])
-        yearCur=monthCur-lstSceneDate[0].month
-        monthMax=Date2Int(lstSceneDate[-1])
+        monthCur=min(lstDateTag)
+        yearCur=min(lstSceneDate).year*100
+        monthMax=max(lstDateTag)
         
         self.lstBFeat=[]
         self.lstBId=[]
-        i=0
+
         while monthCur<=monthMax:
             nameB=nameBlock.format(str(monthCur))
-            SubLogger(logging.INFO, nameB)
-            monthFeat=monthCur
-            
+            SubLogger('INFO', nameB)            
             lstFeatCur=[]
-            
-            while monthCur==monthFeat and i<self.nbFeat:
-                if monthCur==monthFeat: lstFeatCur.append(lstIn[i])
 
-                # Update list index
-                if not i==self.nbFeat-1: 
-                    i+=1
-                    monthFeat=Date2Int(lstSceneDate[i])
-                else:
-                    i+=1
+            for i in range(self.nbFeat):
+                if lstDateTag[i]==monthCur: lstFeatCur.append(lstIn[i])
 
-            # Sorte data
+            # Store data
             self.lstBFeat.append(lstFeatCur)
             self.lstBId.append((nameB, 
                                 len(lstFeatCur)))
@@ -168,7 +161,7 @@ class SceneBlocks():
         # Cluster check
         sumBlock=sum([tu[1] for tu in self.lstBId])
         if not sumBlock==len(lstSceneDate):
-            SubLogger(logging.CRITICAL, 'Block creation issue, %i clustered feature among %i inputs'% (sumBlock, self.nbFeat))
+            SubLogger('CRITICAL', 'Block creation issue, %i clustered feature among %i inputs'% (sumBlock, self.nbFeat))
 
         self.nbB=len(self.lstBId)
     
@@ -186,9 +179,6 @@ class SceneBlocks():
             nbB (int): number of block
             lstBCouple (list): list of json stereo pairs
         '''
-        from SSBP import nameBlock, nameBlockFile
-        from glob import glob
-
         regexBlock=os.path.join(self.dirOut,nameBlock.format('*'))
         lstPath=glob(regexBlock)
         self.nbB=len(lstPath)
@@ -198,87 +188,24 @@ class SceneBlocks():
 
         for pathB in lstPath:
             nameB=os.path.basename(pathB)
-            SubLogger(logging.INFO, nameB)
+            SubLogger('INFO', nameB)
 
             # Feature list
-            pathDescip=os.path.join(pathB, nameBlockFile.format(nameB, 'Search.json'))
-            if not os.path.exists(pathDescip): SubLogger(logging.CRITICAL, '%s descriptor not found'% nameBlockFile.format(nameB, 'Search.json'))
+            pathDescip=os.path.join(pathB, nameBFile.format(nameB, 'Search.geojson'))
+            if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% nameBFile.format(nameB, 'Search.json'))
             with open(pathDescip) as fileIn:
-                self.lstBFeat.append(json.load(fileIn))
+                geojsonTxt=json.load(fileIn)
+                self.lstBFeat.append(geojsonTxt['features'])
 
             # Block ID list and feat number
             self.lstBId.append((nameB, len(self.lstBFeat[-1])))
 
             # Scene couple
-            pathDescip=os.path.join(pathB, nameBlockFile.format(nameB, 'Couple.json'))
+            pathDescip=os.path.join(pathB, nameBFile.format(nameB, 'Pairs.geojson'))
             if os.path.exists(pathDescip):
                 with open(pathDescip) as fileIn:
-                    self.lstBCouple.append(json.load(fileIn))
-
-    def FilterBlock(self, fType, lstBI=False):
-        '''
-        Main filter function leading to Filter_xx functions
-
-        fType (str): fp|
-        lstBI (list): list of block index to write (default: False means all blocks).
-            To index list can be created from block ID list (lstBId) by:
-                [self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBId]
-        out:
-            objBlock (class): updated object, new lstBId and lstBFeat
-        '''
-        if not self.nbB: SubLogger(logging.CRITICAL, 'No existing block')
-
-
-        if fType=='fp':
-            if not lstBI: lstBI=range(self.nbB)
-            for bI in lstBI:
-                SubLogger(logging.INFO, self.lstBId[bI][0])
-                self.Filter_Footprint(bI)
-                    
-    def Filter_Footprint(self, bI):
-        '''
-        Select scenes in a block based on footprint intersection several criteria. It reduces 
-        the scene number.
-
-        bI (int): list ID of the block. For instance, bI=0 means 
-            the first one with block ID=self.lstBId[0][0]
-        '''
-        from SSBP import dicTolerance,rdpEpsi
-        lstBFeatCur=self.lstBFeat[bI]
-        
-        setFeatPop=set()
-        SubLogger(logging.INFO, 'Identical scenes:') 
-        #print('[', end='')
-        for i in range(self.lstBId[bI][1]):
-            for j in range(i+1,self.lstBId[bI][1]):
-                # Basic on footprint
-                if QGeomDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance['geom']): continue
-                lstInd=(0,i,j)
-
-                # Satellite azimuth (ascending/descending)
-                out=QSatAzDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance['satAz'])
-                if out: continue
-
-                # Cloudness discrimination
-                out=QCloudDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance)
-                if out: setFeatPop.add(lstInd[out])
-
-                # Sun elev discrimination
-                out=QSunEDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance)
-                if out: setFeatPop.add(lstInd[out])
-
-                # Quality discrimination
-                out=QQualiDiff(lstBFeatCur[i],lstBFeatCur[j],dicTolerance['quali'])
-                if out: setFeatPop.add(lstInd[out])
-
-                #print((lstBFeatCur[i]['id'],lstBFeatCur[j]['id']), end='')
-                setFeatPop.add(j)
-        #print(']\n=> %i removed scenes'% len(setFeatPop))
-        print('=> %i removed scenes'% len(setFeatPop))
-        
-        if setFeatPop:
-            self.lstBFeat[bI]=[lstBFeatCur[i] for i in range(self.lstBId[bI][1]) if not i in setFeatPop]
-            self.lstBId[bI]=(self.lstBId[bI][0], len(self.lstBFeat[bI]))
+                    geojsonTxt=json.load(fileIn)
+                    self.lstBCouple.append(geojsonTxt['features'])
     
     def StereoCoupling(self, lstBI=False):
         '''
@@ -289,17 +216,17 @@ class SceneBlocks():
                 lstBCouple (list): list of json stereo pairs
         '''
         from copy import deepcopy
-        from SSBP import dicCouple
 
-        if not self.nbB: SubLogger(logging.CRITICAL, 'No existing block')
+        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
 
         self.lstBCouple=[]
 
         if not lstBI: lstBI=range(self.nbB)
         for bI in lstBI:
-            SubLogger(logging.INFO, self.lstBId[bI][0])
+            SubLogger('INFO', self.lstBId[bI][0])
 
             self.lstBCouple.append([])
+            k=-1
             for i in range(self.lstBId[bI][1]):
                 feat1=self.lstBFeat[bI][i]
                 geom1=Polygon(feat1['geometry']['coordinates'][0])
@@ -309,10 +236,13 @@ class SceneBlocks():
                     geom2=Polygon(feat2['geometry']['coordinates'][0])
                     
                     if not geom1.intersects(geom2): continue
-                    
-                    newCouple=dicCouple.copy()
-                    newCouple['properties']['scene1']=feat1['id']
-                    newCouple['properties']['scene2']=feat2['id']
+                    k+=1
+
+                    newCouple=tempDescripPair.copy()
+                    newCouple['id']=k
+                    newCouple['properties']['type']='Pair'
+                    newCouple['properties']['nbScene']=2
+                    newCouple['properties']['scenes']=feat1['id']+'; '+feat2['id']
 
                     geomInters=geom1.intersection(geom2)
                     newCouple["geometry"]["type"]= geomInters.geom_type
@@ -321,11 +251,11 @@ class SceneBlocks():
                         lstCoords=[]
                         for geomPart in geomInters:
                             lstCoords.append([[list(tup) for tup in list(geomPart.exterior.coords)]])
-                            newCouple['properties']['area']+=geomPart.area
+                            newCouple['properties']['area']=geomPart.area
                     
                     else:
                         lstCoords=[[list(tup) for tup in list(geomInters.exterior.coords)]]
-                        newCouple['properties']['area']+=geomInters.area
+                        newCouple['properties']['area']=geomInters.area
 
                     
                     newCouple['geometry']['coordinates']=lstCoords
@@ -333,7 +263,7 @@ class SceneBlocks():
                     self.lstBCouple[-1].append(deepcopy(newCouple))
                     
             
-            SubLogger(logging.INFO, '=> %i stereo pairs'% len(self.lstBCouple[-1]))
+            SubLogger('INFO', '=> %i stereo pairs'% len(self.lstBCouple[-1]))
             
     def Coverage(self, featAoi, lstBI=False):
         '''
@@ -349,12 +279,7 @@ class SceneBlocks():
             objBlock (class): updated object
                 lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
         '''
-        if not self.nbB: SubLogger(logging.CRITICAL, 'No existing block')
-
-        from rasterio.features import geometry_mask
-        from rasterio.transform import from_origin
-        from rasterio.crs import CRS
-        from SSBP import profileCoverTif, imageGsd
+        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
 
         geomAoiJson=featAoi['features'][0]['geometry']
         geomAoi=Polygon(geomAoiJson['coordinates'][0][0])
@@ -376,7 +301,7 @@ class SceneBlocks():
 
         if not lstBI: lstBI=range(self.nbB)
         for bI in lstBI:
-            SubLogger(logging.INFO, self.lstBId[bI][0])
+            SubLogger('INFO', self.lstBId[bI][0])
             
             # Update and store image profile
             self.lstCoverage.append([profileCoverTif.copy(),])
@@ -440,9 +365,7 @@ class SceneBlocks():
         simpleGeom (bool): replace existing geometry by the simplify one.
         out:
         '''
-        if not self.nbB: SubLogger(logging.CRITICAL, 'No existing block')
-
-        from SSBP import rdpEpsi, nameBlockFile, sceneIdExt, basicGeojson
+        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
         
         # Write all files
         if lstBId:
@@ -451,7 +374,7 @@ class SceneBlocks():
             lstBId=range(self.nbB)
 
         for bI in lstBId:
-            SubLogger(logging.INFO, self.lstBId[bI][0])
+            SubLogger('INFO', self.lstBId[bI][0])
 
             # Creation simplify geometry
             if simpleGeom and not 'geometry_simple' in self.lstBFeat[bI][0]:
@@ -463,40 +386,35 @@ class SceneBlocks():
             pathDir= os.path.join(self.dirOut, self.lstBId[bI][0])
             if not os.path.exists(pathDir): os.mkdir(pathDir)
 
-            # Search json
-            pathOut=os.path.join(pathDir,nameBlockFile.format(self.lstBId[bI][0], 'Search.json'))
-            if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
-            with open(pathOut,'w') as fileOut:
-                fileOut.write(json.dumps(self.lstBFeat[bI], indent=2))
-
             # Scene Id txt
-            pathOut=os.path.join(pathDir,nameBlockFile.format(self.lstBId[bI][0], 'SceneId.txt'))
+            pathOut=os.path.join(pathDir,nameBFile.format(self.lstBId[bI][0], 'SceneId.txt'))
             if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
             with open(pathOut,'w') as fileOut:
-                strOut='\n'.join([feat['id']+sceneIdExt for feat in self.lstBFeat[bI]])
+                strOut='\n'.join([feat['id']+extSceneIn for feat in self.lstBFeat[bI]])
                 fileOut.write(strOut)
 
             # Search Geojson
-            pathOut=os.path.join(pathDir,nameBlockFile.format(self.lstBId[bI][0], 'Search.geojson'))
+            pathOut=os.path.join(pathDir,nameBFile.format(self.lstBId[bI][0], 'Search.geojson'))
             if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+            objOut=tempGeojson.copy()
+            objOut['name']=nameBFile.format(self.lstBId[bI][0], 'Search')
+            objOut['features']=self.lstBFeat[bI]
             with open(pathOut,'w') as fileOut:
-                objOut=basicGeojson
-                objOut['name']=nameBlockFile.format(self.lstBId[bI][0], 'Search_init')
-                objOut['features']=self.lstBFeat[bI]
                 fileOut.write(json.dumps(objOut, indent=2))
 
             # Coupling json
             if 'lstBCouple' in self.__dir__():
-                pathOut= os.path.join(pathDir, nameBlockFile.format(self.lstBId[bI][0], 'Couple.json'))
+                pathOut= os.path.join(pathDir, nameBFile.format(self.lstBId[bI][0], 'Pairs.geojson'))
                 if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+                objOut=tempGeojson.copy()
+                objOut['name']=nameBFile.format(self.lstBId[bI][0], 'Pairs')
+                objOut['features']=self.lstBCouple[bI]
                 with open(pathOut,'w') as fileOut:
-                    fileOut.write('[\n')
-                    fileOut.write(',\n'.join([str(item).replace('\'','"') for item in self.lstBCouple[bI]]))
-                    fileOut.write('\n]')
+                    fileOut.write(json.dumps(objOut, indent=2))
             
             # Coverage tif
             if 'lstCoverage' in self.__dir__():
-                pathOut= os.path.join(pathDir, nameBlockFile.format(self.lstBId[bI][0], 'Coverage.tif'))
+                pathOut= os.path.join(pathDir, nameBFile.format(self.lstBId[bI][0], 'Coverage.tif'))
                 if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
                 with rasterio.open(pathOut,'w',**self.lstCoverage[bI][0]) as fileOut:
                     for iFrame in range(1,len(self.lstCoverage[bI])):
@@ -557,7 +475,7 @@ def SimplifyGeom(geomIn,rdpEpsi):
             strOut+=str(geomDP)
             strOut+='\nWeight\n'+str(tableDistOther**2)
             strOut+='\nCentre\n'+str(centre)
-            SubLogger(logging.CRITICAL, strOut)
+            SubLogger('CRITICAL', strOut)
         
         if len(indPts)==1:
             indMax=indPts[0]
@@ -600,7 +518,7 @@ def SimplifyGeom(geomIn,rdpEpsi):
         strOut+=str(geomDP)
         strOut+='\nOutput geometry (%i pts)\n'% geomOut.shape[0]
         strOut+=str(geomOut)
-        SubLogger(logging.CRITICAL, strOut)
+        SubLogger('CRITICAL', strOut)
     else:
         geomOut.append(geomOut[0])
     
@@ -621,113 +539,6 @@ def DisplayFootprint(geom1,geom2,centre):
     fig.suptitle('Footprint')
     plt.show()
 
-def QGeomDiff(feat1, feat2, tol):
-    '''
-    Compare geometric footprints based on overlapping area. 
-
-    feat1 (json object): first scene descriptor
-    feat2 (json object): second scene descriptor
-    tol (float): similarity percentage, stored in dicTolerance
-
-    out:
-        check (bool): bool answer about difference.
-    '''
-    geom1=Polygon(feat1['geometry']['coordinates'][0])
-    geom2=Polygon(feat2['geometry']['coordinates'][0])
-    
-    if not geom1.intersects(geom2): return True
-
-    geomInters=geom1.intersection(geom2)
-    percentOverlap=geomInters.area/geom1.area
-    
-    if percentOverlap<tol:
-        return True
-    else:
-        return False
-
-def QSunEDiff(feat1, feat2, tol):
-    '''
-    Compare feature sun elevation states. Return False 
-    if they are similare or the best one index (1,2)
-    
-    feat1 (json object): first scene descriptor
-    feat2 (json object): second scene descriptor
-    tol (float): not used
-
-    out:
-        check (bool): 0-not different, 1-feat1 is the best, 2-feat2 is the best
-    '''
-    if not 'sun_elevation' in feat1['properties'] or not 'sun_elevation' in feat2['properties']:
-        return 0
-    diff=feat1['properties']['sun_elevation']-feat2['properties']['sun_elevation']
-    if not diff:
-        return diff
-    else:
-        return (diff<0)+1   
-
-def QCloudDiff(feat1, feat2, tol):
-    '''
-    Compare feature sun elevation states. Return False 
-    if they are similare or the best one index (1,2)
-    
-    feat1 (json object): first scene descriptor
-    feat2 (json object): second scene descriptor
-    tol (float): not used
-
-    out:
-        check (bool): 0-not different, 1-feat1 is the best, 2-feat2 is the best
-    '''
-    if 'cloud_percent' in feat1['properties'] and 'cloud_percent' in feat2['properties']:
-        keyCloud='cloud_percent'
-    else:
-        keyCloud='cloud_cover'
-    diff=feat1['properties'][keyCloud]-feat2['properties'][keyCloud]
-    if not diff:
-        return diff
-    else:
-        return (diff>0)+1
-
-def QQualiDiff(feat1, feat2, tol):
-    '''
-    Compare feature quality states. Return False 
-    if they are similare or the best one index (1,2)
-    
-    feat1 (json object): first scene descriptor
-    feat2 (json object): second scene descriptor
-    tol (float): sorted quality list (best to worst)
-
-    out:
-        check (bool): 0-not different, 1-feat1 is the best, 2-feat2 is the best
-
-
-    '''
-    if not 'quality_category' in feat1['properties'] or not 'quality_category' in feat2['properties']:
-        return 0
-    if feat1['properties']['quality_category']==feat2['properties']['quality_category']:
-            return 0
-    else:
-        if not feat1['quality_category'] in tol or not feat2['quality_category'] in tol:
-            SubLogger(logging.CRITICAL, 'CompQuali: incomplet list of category (%s or %s)'% (feat1['properties']['quality_category'],feat2['properties']['quality_category']))
-        order1=tol.index(feat1['quality_category'])
-        order2=tol.index(feat2['quality_category'])
-        
-        return ((order1-order2)>0)+1
-
-def QSatAzDiff(feat1, feat2, tol):
-    '''
-    Compare feature sun elevation states. Return False 
-    if they are similare or True if different
-    
-    feat1 (json object): first scene descriptor
-    feat2 (json object): second scene descriptor
-    tol (float): not used
-
-    out:
-        check (bool): 0-not difference, 1-difference
-    '''
-    if not 'satellite_azimuth' in feat1['properties'] or not 'satellite_azimuth' in feat2['properties']:
-        return 0
-    return abs(feat1['properties']['satellite_azimuth']-feat2['properties']['satellite_azimuth'])>tol 
 
 #=======================================================================
 #main

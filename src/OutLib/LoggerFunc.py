@@ -4,6 +4,7 @@
 
 import os, sys, logging, time
 from datetime import datetime
+import logging
 from termcolor import colored
 
 #-----------------------------------------------------------------------
@@ -11,7 +12,7 @@ from termcolor import colored
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['SetupLogger', 'SubLogger', 'ProcessStdout', 'PrintPsItem', '_ColorfulFormatter']
+__all__ =['SetupLogger', 'SubLogger', 'ProcessStdout', 'PrintPsItem']
 
 #-----------------------------------------------------------------------
 # Hard command
@@ -72,11 +73,32 @@ def SetupLogger(name='', output=None, *, color=True ):
 
     return logger
 
+class _ColorfulFormatter(logging.Formatter):
+    def __init__(self, *args, **kwargs):
+        self._root_name = kwargs.pop("root_name") + "."
+        self._abbrev_name = kwargs.pop("abbrev_name", "")
+        if len(self._abbrev_name):
+            self._abbrev_name = self._abbrev_name + "."
+        super(_ColorfulFormatter, self).__init__(*args, **kwargs)
+
+    def formatMessage(self, record):
+        record.name = record.name.replace(self._root_name, self._abbrev_name)
+        log = super(_ColorfulFormatter, self).formatMessage(record)
+        if record.levelno == logging.WARNING:
+            prefix = colored("WARNING", "red")
+        elif record.levelno == logging.ERROR:
+            prefix = colored("ERROR", "red", attrs=["underline"])
+        elif record.levelno == logging.ERROR or record.levelno == logging.CRITICAL:
+            prefix = colored("\nSTOP", "red", attrs=["blink", "underline"])
+        else:
+            return log
+        return prefix + " " + log
+
 def SubLogger(lvl, msg, *, name=None):
     """
     Log only for the first n times.
     Args:
-        lvl (int): the logging level
+        lvl (str): the logging level (uppercase) based on logging lib
         msg (str):
         name (str): name of the logger to use. Will use the caller's module by default.
     """
@@ -84,8 +106,23 @@ def SubLogger(lvl, msg, *, name=None):
     
     msg= caller_key[-1] + ': ' + msg
     
-    logging.getLogger(name or caller_module).log(lvl, msg)
-    if lvl==logging.CRITICAL: sys.exit()
+    if lvl=='INFO':
+        level=logging.INFO
+        endAfter=False
+    elif lvl=='WARNING':
+        level=logging.WARNING
+        endAfter=False
+    elif lvl=='ERROR':
+        level=logging.ERROR
+        endAfter=False
+    elif lvl=='CRITICAL':
+        level=logging.CRITICAL
+        endAfter=True
+    else:
+        print('Unkwon logging level: %s'% lvl)
+
+    logging.getLogger(name or caller_module).log(level, msg)
+    if endAfter: sys.exit()
 
 def _find_caller():
     """
@@ -238,26 +275,5 @@ def PrintPsItem(lstIn,select=False):
             print()
     
     if select:return lstSelect
-
-class _ColorfulFormatter(logging.Formatter):
-    def __init__(self, *args, **kwargs):
-        self._root_name = kwargs.pop("root_name") + "."
-        self._abbrev_name = kwargs.pop("abbrev_name", "")
-        if len(self._abbrev_name):
-            self._abbrev_name = self._abbrev_name + "."
-        super(_ColorfulFormatter, self).__init__(*args, **kwargs)
-
-    def formatMessage(self, record):
-        record.name = record.name.replace(self._root_name, self._abbrev_name)
-        log = super(_ColorfulFormatter, self).formatMessage(record)
-        if record.levelno == logging.WARNING:
-            prefix = colored("WARNING", "red")
-        elif record.levelno == logging.ERROR:
-            prefix = colored("ERROR", "red", attrs=["underline"])
-        elif record.levelno == logging.ERROR or record.levelno == logging.CRITICAL:
-            prefix = colored("\nSTOP", "red", attrs=["blink", "underline"])
-        else:
-            return log
-        return prefix + " " + log
 
 

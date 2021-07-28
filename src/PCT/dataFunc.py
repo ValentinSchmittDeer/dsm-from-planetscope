@@ -8,15 +8,16 @@ from datetime import datetime
 from glob import glob
 from pprint import pprint
 
-from PVL.PVL_Logger import SetupLogger, SubLogger, ProcessStdout
+from OutLib.LoggerFunc import *
+
 #-----------------------------------------------------------------------
 # Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['CheckPlCom', 'Bucket_Status', 'MakeScript_JSBatchMake']
+__all__ =['CheckPC', 'PCTBucket']
 SetupLogger(name=__name__)
-
+#SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
@@ -53,7 +54,7 @@ class PCTBucket:
         self.tupleLevel=dicLevel[levelCur]
         
         # Local
-        if not os.path.exists(pathSceneID): SubLogger(logging.CRITICAL, 'pathSceneID not found')
+        if not os.path.exists(pathSceneID): SubLogger('CRITICAL', 'pathSceneID not found')
         with open(pathSceneID) as fileIn:
             self.lstLocFeat=tuple([lineCur.strip() for lineCur in fileIn.readlines()])
         self.nbLocFeat=len(self.lstLocFeat)
@@ -134,11 +135,11 @@ class PCTBucket:
             match (bool): local desciptor and cloud bucket match
         '''
         if not self.exists:
-            SubLogger(logging.ERROR, 'cloud bucket not found')
+            SubLogger('ERROR', 'cloud bucket not found')
             return False
 
         if not self.nbCloFeat==self.nbLocFeat:
-            SubLogger(logging.ERROR, 'different scene numbers')
+            SubLogger('ERROR', 'different scene numbers')
             return False
 
         from PCT import nameFeat
@@ -149,7 +150,7 @@ class PCTBucket:
                     for itemLoc in self.lstLocFeat 
                         if itemLoc.replace(grepLoc,grepClo) in [i for i,j,k,l in self.lstCloFeat]]
         if not self.nbLocFeat==sum(countLoc):
-            SubLogger(logging.ERROR, 'missing scenes on cloud bucket')
+            SubLogger('ERROR', 'missing scenes on cloud bucket')
             return False
 
         countClo=[1 
@@ -157,11 +158,11 @@ class PCTBucket:
                         if itemClo.replace(grepClo,grepLoc) in self.lstLocFeat]
         
         if not self.nbCloFeat==sum(countClo):
-            SubLogger(logging.ERROR, 'additional scenes on cloud bucket')
+            SubLogger('ERROR', 'additional scenes on cloud bucket')
             return False
 
         if not self.sizeLoc==self.sizeClo:
-            SubLogger(logging.ERROR, 'cloud and local with different size')
+            SubLogger('ERROR', 'cloud and local with different size')
             return False
 
         return True
@@ -175,7 +176,7 @@ class PCTBucket:
                 batchId (str):
         '''
         if not self.exists:
-            SubLogger(logging.ERROR, 'cloud bucket not found')
+            SubLogger('ERROR', 'cloud bucket not found')
             return False
 
         from PCT import dicLevel, nameFeat
@@ -213,7 +214,7 @@ class PCTBucket:
         '''
         # Create job system batch
         if self.exists:
-            SubLogger(logging.ERROR, 'cloud bucket already exists')
+            SubLogger('ERROR', 'cloud bucket already exists')
             return True
 
         from PCT import nameJobFile, nameFeat
@@ -222,7 +223,7 @@ class PCTBucket:
         # Job system batch
         self.batchId = jobs.create_batch(submitter="valentin", description=self.nameBuck)
         #self.batchId = 1002409971
-        SubLogger(logging.INFO, '%s created by job batch %s'% (self.nameBuck, self.batchId))
+        SubLogger('INFO', '%s created by job batch %s'% (self.nameBuck, self.batchId))
         
         urls.set_urls(self.cloud)
         self.batchUrl='%s/v0/batch/%s' % (urls.PL_JOBS_URL, self.batchId)
@@ -283,7 +284,7 @@ class PCTBucket:
             out (bool): return code 0=ok, 1=error
         '''
         if os.path.exists(self.dirData):
-            SubLogger(logging.ERROR, 'Local data directory already exists')
+            SubLogger('ERROR', 'Local data directory already exists')
             return True
         os.mkdir(self.dirData)
 
@@ -300,7 +301,7 @@ class PCTBucket:
             out (bool): return code 0=ok, 1=error
         '''
         if not self.exists:
-            SubLogger(logging.ERROR, 'cloud bucket not found')
+            SubLogger('ERROR', 'cloud bucket not found')
             return True
 
         from PCT import nameFeat

@@ -1,29 +1,50 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-'''
-# Copyright PythonValentinLibrary
 
 import os, sys
-from pprint import pprint
-import xml.etree.ElementTree as ET
 import json
+import logging
+from pprint import pprint
 import numpy as np
-from numpy.linalg import matrix_rank, svd, inv
-from scipy.linalg import lstsq
-from sklearn.preprocessing import PolynomialFeatures
-from math import pi
+from numpy.linalg import inv
+
+from PVL.PVL_Logger import SetupLogger, SubLogger
 
 #-----------------------------------------------------------------------
-# Hard arguments
+# Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['RPCin','AffineTransfo','Geo2Cart_Elli','DisplayMat']
-
-gdinfo='gdalinfo'
+__all__ =['AspUtility', 'ObjTsai']
+SetupLogger(name=__name__)
+#SubLogger('WARNING', 'jojo')
 
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
+def ObjTsai(pathIn):
+    # Read Tsai
+    dic={}
+    with open(pathIn) as fileIn:
+        for line in fileIn:
+            if not '=' in  line: continue
+
+            words=[part.strip() for part in line.strip().split('=')]
+            dic[words[0]]=[float(part) for part in words[1].split()]
+
+    # Extract P matrix
+    dic['matR']=np.array(dic['R']).reshape(3,3)
+    dic['matC']=np.array(dic['C']).reshape(3,1)
+    matRinv=inv(dic['matR'])
+    dic['matEO_h']=np.hstack((matRinv, -matRinv@dic['matC']))
+    dic['matK_h']=np.array([
+        [dic['fu'][0]/dic['pitch'][0], 0                           , dic['cu'][0] ],
+        [0                            , dic['fv'][0]/dic['pitch'][0], dic['cv'][0]],
+        [0                            , 0                           , 1           ]])
+    dic['matP_h']=dic['matK_h']@dic['matEO_h']
+    
+    return dic
+
 class RPCin:
     """
     Create a RPC python object from metadata files. Currently able to read
@@ -675,13 +696,10 @@ def Geo2Cart_Elli(ptGeo,elliAF='WGS84'):
     return n
     return ptsOut.T
 
-def DisplayMat(mat):
-    from PIL import Image
-    print('Matrix (%ix%i, rk=%i):'% (mat.shape[0],mat.shape[1],matrix_rank(mat)))
-    print(np.abs(mat).astype(bool).astype(int))
-    matDisp=(mat==0).astype(int)*255
-    print('Image: White=0; Black=full (±)')
-    imgMat=Image.fromarray(matDisp.astype(float))
-    imgMat.show()
-    sys.exit()
-
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
+    print('\nFunctions and classes available in %s:'% __title__)
+    print([i for i in dir() if not '__' in i])
+        

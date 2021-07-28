@@ -3,8 +3,7 @@
 
 import os, sys
 import json
-import logging
-from PVL.PVL_Logger import SetupLogger, SubLogger
+from OutLib.LoggerFunc import *
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -13,12 +12,12 @@ __author__='Valentin Schmitt'
 __version__=1.0
 __all__ =[]
 SetupLogger(name=__name__)
-
+#SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
 
-SubLogger(logging.WARNING, 'jojo')
+
 
 #=======================================================================
 #main

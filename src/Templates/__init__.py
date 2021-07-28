@@ -9,6 +9,5 @@ Lib
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['PVL_Logger', 'PVL_Rpc']
+__all__ =[]
 
-#  variables
