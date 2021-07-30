@@ -11,7 +11,6 @@ from shutil import copy2
 from OutLib.LoggerFunc import *
 from VarCur import *
 from SSBP import *
-from PCT.dataFunc import CheckPC
 from PCT import metaDFunc
 
 #-------------------------------------------------------------------
@@ -95,13 +94,15 @@ def Main(args):
 
         if not args.b in methodB: raise RuntimeError("-b must be one of %s"% str(methodB))        
 
+        if args.fBH and not args.extMD: raise RuntimeError("The BH filtering needs access to extended metadata")
+        
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
-        if not checkSearch: logger.warning('Former search mode')
-        
 
         print()
-        if checkSearch:
+        if not checkSearch: 
+            logger.warning('Former search mode')
+        else:
             logger.warning('New search mode')
             #---------------------------------------------------------------
             # Setup Auth
@@ -159,8 +160,8 @@ def Main(args):
         # Block first filtering
         #---------------------------------------------------------------
         if args.fFP:
-            logger.info('# Block first filtering')
-            objBlocks=filterFunc.FilterBlock(objBlocks, 'fp')
+            logger.info('# Block footprint filtering')
+            filterFunc.FilterBlocks(objBlocks, 'fp')
             logger.info(objBlocks)
 
         #---------------------------------------------------------------
@@ -168,10 +169,10 @@ def Main(args):
         #---------------------------------------------------------------
         if args.extMD:
             logger.info('# Include Ext MD')
-            if CheckPC():
-                logger.error('read extended MD and stor them in Json file')
-                #metaDFunc...
-                logger.info(objBlocks)
+            if metaDFunc.CheckPC():
+                lstMdCur=('sat:alt', 'sat:lat', 'sat:lng', 'sat:off_nadir', 'sat:satellite_azimuth_mean')
+                metaDFunc.ExtractMD_Blocks(objBlocks,lstMdCur)
+                objBlocks.SatGeo2Cart()
             else:
                 logger.error('The extended metadata retrieval needs planet_common env and it is not accessible. You can use -extMD to stop reading extended MD and -fBH to stop the B/H filtering (which needs B/H info from extended MD). The process will continue without extended MD and B/H filtering')
                 args.extMD=False
@@ -187,29 +188,34 @@ def Main(args):
         #---------------------------------------------------------------
         # Block Coverage
         #---------------------------------------------------------------
-        if args.cove:
+        if args.cov:
             logger.info('# Block Coverage')
             objBlocks.Coverage(featAoi)
-            logger.info(objBlocks)
 
         #---------------------------------------------------------------
         # Block storage
         #---------------------------------------------------------------
         logger.info('# Block storage')
-        #objBlocks.WriteBlocks()
+        objBlocks.WriteBlocks()
         
-        ###
-        #sys.exit()
-        logger.warning('At this point, a reduced version of the block is available, go for B/H selection now')
-        #objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
-        #logger.info(objBlocks)
+        
         #---------------------------------------------------------------
         # Block B/H filtering
         #---------------------------------------------------------------
+        ####
+        #objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, 'dir')
         if args.fBH:
             logger.info('# Block B/H filtering')
-            objBlocks=filterFunc.FilterBlock(objBlocks, 'bh')
-        
+            filterFunc.FilterBlocks(objBlocks, 'bh', aoi=featAoi, red=args.fBHred)
+            logger.info(objBlocks)
+            sys.exit()
+            # Update Coverage
+            if args.cov:
+                logger.info('# Update Coverage')
+                objBlocks.Coverage(featAoi)
+
+            # Update block descriptors
+            objBlocks.WriteBlocks()
 
     #---------------------------------------------------------------
     # Exception management
@@ -232,16 +238,18 @@ if __name__ == "__main__":
         
         # Block parameters
         parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
-        parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: True)')
+        parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: False)')
+        parser.add_argument('-cov', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
+        
+        # Filter parameters
         parser.add_argument('-fFP', action='store_false', help='Footprint filtering (default: True)')
         parser.add_argument('-fBH', action='store_true', help='B/H filtering (default: False)')
-        parser.add_argument('-cove', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
-        
+        parser.add_argument('-fBHred', default=0, type=int, help='B/H filtering redundancy (default: 0)')
 
         # Database search strict parameters
         parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
         parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
-        parser.add_argument('-cloudUnder', type=int, default=0.1, help='Maximum cloud coverage %% integer')
+        parser.add_argument('-cloudUnder', type=int, default=10, help='Maximum cloud coverage, %% integer (default: 10)')
         parser.add_argument('-dateAcq', nargs='+', help='Acquisition date yyyy-mm-dd past in the order')
         parser.add_argument('-inst', nargs='+', default=['PS2'], help='Dove generation(s) <PS2|PS2.SD|PSB.SD> (default:PS2)')
         parser.add_argument('-viewAngle', type=float, help='Maximum view angle')

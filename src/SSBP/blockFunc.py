@@ -15,6 +15,7 @@ from rasterio.crs import CRS
 
 from OutLib.LoggerFunc import *
 from VarCur import *
+from BlockProc.GeomFunc import Geo2Cart_Elli
 
 from pprint import pprint
 
@@ -86,8 +87,6 @@ class SceneBlocks():
                 lstBFeat (list with json): list with feature decription
                 nbB (int): number of created block  
         '''
-        from SSBP import nameBlock
-
         dateB='{}-{}'.format(lstIn[0]\
                                     ['properties']\
                                         ['acquired']\
@@ -103,7 +102,7 @@ class SceneBlocks():
                                   )
         nameB=nameBlock.format(dateB)
         SubLogger('INFO', nameB)
-        self.lstBFeat=lstIn
+        self.lstBFeat=[lstIn,]
         self.lstBId=[(nameB, 
                     self.nbFeat)]
         self.nbB=1
@@ -207,10 +206,53 @@ class SceneBlocks():
                     geojsonTxt=json.load(fileIn)
                     self.lstBCouple.append(geojsonTxt['features'])
     
-    def StereoCoupling(self, lstBI=False):
+    def SatGeo2Cart(self, lstBName=False):
+        '''
+        Compute the cartesian coordinate of the camera center
+        based on lat [°], long [°] and alt [km] above 
+        the ellipsoid WGS84. iIt can be run after extended 
+        metadata importation.
+        
+        descrip1 (json): scene desciptor to update
+        out:
+            objBlock (class): updated object
+                    lstBCouple (list): list of json stereo pairs
+        ''' 
+        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
+
+        if lstBName:
+            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
+        else: 
+            lstBI=range(self.nbB)
+
+        for bI in lstBI:
+            SubLogger('INFO', self.lstBId[bI][0])
+
+
+            ptsGeo=np.zeros([self.lstBId[bI][1],3])
+            for i in range(self.lstBId[bI][1]):
+                lstKeys=('sat:alt_km', 'sat:lat_deg', 'sat:lng_deg')
+                checkAttrib=[key in self.lstBFeat[bI][i]['properties'].keys() for key in lstKeys]
+                if False in checkAttrib: 
+                    SubLogger('ERROR', 'extended MD not available, requires %s'% str(lstKeys))
+                    continue
+                
+                ptsGeo[i,:]=np.array([self.lstBFeat[bI][i]['properties']['sat:lng_deg'], 
+                                      self.lstBFeat[bI][i]['properties']['sat:lat_deg'],
+                                      self.lstBFeat[bI][i]['properties']['sat:alt_km']*1e3])
+             
+            ptsCart=Geo2Cart_Elli(ptsGeo)
+
+            # Update
+            for i in range(self.lstBId[bI][1]):
+                for j, key in enumerate(('ecefX_m', 'ecefY_m', 'ecefZ_m')):
+                    self.lstBFeat[bI][i]['properties'][key]=ptsCart[i,j]
+
+    def StereoCoupling(self, lstBName=False):
         '''
         Create list of stereo scene pairs
         
+        lstBName (lst): list of block name (default: False means all)
         out:
             objBlock (class): updated object
                 lstBCouple (list): list of json stereo pairs
@@ -221,7 +263,11 @@ class SceneBlocks():
 
         self.lstBCouple=[]
 
-        if not lstBI: lstBI=range(self.nbB)
+        if lstBName:
+            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
+        else: 
+            lstBI=range(self.nbB)
+
         for bI in lstBI:
             SubLogger('INFO', self.lstBId[bI][0])
 
@@ -238,12 +284,22 @@ class SceneBlocks():
                     if not geom1.intersects(geom2): continue
                     k+=1
 
+                    # New pair
                     newCouple=tempDescripPair.copy()
                     newCouple['id']=k
+                    newCouple['properties']['id']=k
                     newCouple['properties']['type']='Pair'
                     newCouple['properties']['nbScene']=2
                     newCouple['properties']['scenes']=feat1['id']+'; '+feat2['id']
+                    
+                    # New B/H
+                    lstKeys=('ecefX_m', 'ecefY_m', 'ecefZ_m', 'sat:alt_km')
+                    checkAttrib=[key in feat1['properties'].keys() for key in lstKeys]
+                    checkAttrib+=[key in feat2['properties'].keys() for key in lstKeys]
+                    if not False in checkAttrib:
+                        newCouple['properties']['bh']=RatioBH(feat1,feat2)
 
+                    # New geometry 
                     geomInters=geom1.intersection(geom2)
                     newCouple["geometry"]["type"]= geomInters.geom_type
                     
@@ -257,24 +313,21 @@ class SceneBlocks():
                         lstCoords=[[list(tup) for tup in list(geomInters.exterior.coords)]]
                         newCouple['properties']['area']=geomInters.area
 
-                    
                     newCouple['geometry']['coordinates']=lstCoords
-
+                    
                     self.lstBCouple[-1].append(deepcopy(newCouple))
                     
             
             SubLogger('INFO', '=> %i stereo pairs'% len(self.lstBCouple[-1]))
             
-    def Coverage(self, featAoi, lstBI=False):
+    def Coverage(self, featAoi, lstBName=False):
         '''
         Compute the number of scene per ground sample and 
         stereopair (if available). It is written down laster 
         by the WriteBlocks function.
 
         featAoi (json): orignal AOI feature used as mask
-        lstBI (list): list of block index to write (default: False means all blocks).
-            To index list can be created from block ID list (lstBId) by:
-                [self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBId] 
+        lstBName (list): list of block name (default: False means all)
         out:
             objBlock (class): updated object
                 lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
@@ -299,7 +352,11 @@ class SceneBlocks():
 
         self.lstCoverage=[]
 
-        if not lstBI: lstBI=range(self.nbB)
+        if lstBName:
+            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
+        else: 
+            lstBI=range(self.nbB)
+
         for bI in lstBI:
             SubLogger('INFO', self.lstBId[bI][0])
             
@@ -356,11 +413,11 @@ class SceneBlocks():
                                 )
         return frameOut
             
-    def WriteBlocks(self, lstBId=False, simpleGeom=False):
+    def WriteBlocks(self, lstBName=False, simpleGeom=False):
         '''
         Write block descriptors at the given path creating block subfolder.
 
-        lstBId (list): list of block name to write (default: False means all blocks).
+        lstBName (list): list of block name to write (default: False means all blocks).
             e.g.: ['B202010', 'B202011'] 
         simpleGeom (bool): replace existing geometry by the simplify one.
         out:
@@ -368,8 +425,8 @@ class SceneBlocks():
         if not self.nbB: SubLogger('CRITICAL', 'No existing block')
         
         # Write all files
-        if lstBId:
-             lstBId=[self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBId]
+        if lstBName:
+             lstBId=[self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBName]
         else:
             lstBId=range(self.nbB)
 
@@ -419,6 +476,7 @@ class SceneBlocks():
                 with rasterio.open(pathOut,'w',**self.lstCoverage[bI][0]) as fileOut:
                     for iFrame in range(1,len(self.lstCoverage[bI])):
                         fileOut.write(self.lstCoverage[bI][iFrame].astype('uint8'), iFrame)
+                self.lstCoverage[bI]=False
 
 
 def Date2Int(datetimeObj):
@@ -539,6 +597,28 @@ def DisplayFootprint(geom1,geom2,centre):
     fig.suptitle('Footprint')
     plt.show()
 
+
+def RatioBH(descrip1, descrip2):
+    '''
+    Compute B/H ratio based on lat, long and altitude of 2 images.
+
+    descrip1 (json): scene 1 desciptor
+    descrip2 (json): scene 2 desciptor
+    out:
+        bh (float): B/H ratio
+    '''
+    ptsCart=np.zeros([2,3])
+    for k,scene in enumerate((descrip1, descrip2)):
+        ptsCart[k,:]=np.array([scene['properties']['ecefX_m'], 
+                                scene['properties']['ecefY_m'], 
+                                scene['properties']['ecefZ_m']])
+
+    base=sum(np.power(ptsCart[1,:]-ptsCart[0,:],2))**0.5
+    
+
+    height=(descrip1['properties']['sat:alt_km']+descrip2['properties']['sat:alt_km'])/2*1e3
+
+    return base/height
 
 #=======================================================================
 #main

@@ -4,7 +4,8 @@
 import os, sys
 import json
 import logging
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon, Point
+from pprint import pprint
 
 from OutLib.LoggerFunc import *
 from VarCur import *
@@ -21,7 +22,7 @@ SetupLogger(name=__name__)
 # Hard command
 #-----------------------------------------------------------------------
 
-def FilterBlock(objIn, fType, lstBName=False):
+def FilterBlocks(objIn, fType, lstBName=False, aoi=None, red=None):
     '''
     Main filter function leading to Filter_xx functions
 
@@ -43,13 +44,16 @@ def FilterBlock(objIn, fType, lstBName=False):
     for bI in lstBI:
         SubLogger('INFO', objIn.lstBId[bI][0])
         if fType=='fp':
-            objIn.lstBFeat[bI]=Filter_Footprint(objIn.lstBFeat[bI])
+            Filter_Footprint(objIn.lstBFeat[bI])
         elif fType=='bh':
-            objIn.lstBFeat[bI]=Filter_BHratio(objIn.lstBFeat[bI])
-        
+            if not aoi: SubLogger('CRITICAL', 'BH filtering needs the AOI shape (aoi)')
+            if red is None: SubLogger('CRITICAL', 'BH filtering needs a redundancy (red)')
+            if not 'lstBCouple' in objIn.__dir__(): SubLogger('CRITICAL', 'BH filtering needs stereo pairs')
+            
+            pathOut=os.path.join(objIn.dirOut, objIn.lstBId[bI][0], nameBFile.format(objIn.lstBId[bI][0], 'BHfTrack.geojson'))
+            Filter_BHratio(objIn.lstBFeat[bI], objIn.lstBCouple[bI], aoi, red, pathOut)
+            
         objIn.lstBId[bI]=(objIn.lstBId[bI][0], len(objIn.lstBFeat[bI]))
-
-    return objIn
 
 def Filter_Footprint(lstBFeatCur):
     '''
@@ -87,10 +91,8 @@ def Filter_Footprint(lstBFeatCur):
             setFeatPop.add(j)
     print('=> %i removed scenes'% len(setFeatPop))
     
-    if setFeatPop:
-         return [lstBFeatCur[i] for i in range(nbFeat) if not i in setFeatPop]
-    else:
-        return lstBFeatCur
+    for i,j in enumerate(sorted(setFeatPop)):
+        del lstBFeatCur[j-i]
 
 def QGeomDiff(feat1, feat2, tol):
     '''
@@ -200,15 +202,114 @@ def QSatAzDiff(feat1, feat2, tol):
         return 0
     return abs(feat1['properties']['satellite_azimuth']-feat2['properties']['satellite_azimuth'])>tol 
 
-def Filter_BHratio(lstBFeatCur):
+def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
     '''
     From the given filtered scene list (may be One or Month block, 
     may be pre-filtered using footprint), it select the best scenes
     according to their B/H ratio. It relies on Pairs.geojson which
     must include the B/H ratio (from extented MD)
+
+    lstBFeatCur (list): list of scene descriptors to update
+    lstBCoupleCur (list): list of stereopair to update
+    aoiIn (geojson): AOI shape
+    red (int): number of redundancy (0 means single coverage)
+    pathOut (str): path of the tacking file
+    disp (bool): display the tracking map (default: False)
+    out:
+        (updated objects)
     '''
-    print('B/H')
-    pass
+    geomAoi=Polygon(aoiIn['features'][0]['geometry']['coordinates'][0][0])
+    
+    lstPair=sorted(lstBCoupleCur, key=SortBH, reverse=True)
+    nbPair=len(lstPair)
+
+    # Redundancy management
+    lstGeomRemain=[geomAoi]*(red+1)
+    j=[-1]*(red+1)
+    if disp: print('r'+'\tr'.join([str(i) for i in list(range(red+1))])+'\tB/H')
+    objOut=tempGeojson.copy() # Output file
+    setScene=set()  # Scene IDs
+    lstPairId=[]    # Stereopair IDs
+    i=-1
+    while True in [poly.area>0 for poly in lstGeomRemain] and i<nbPair-1 :
+        i+=1
+        geomPair=Polygon(lstPair[i]['geometry']['coordinates'][0])
+
+        # Pair filtering  
+        if geomPair.area<dicTolerance['bhAreaPair']: continue
+        
+        # Redundacy polygons
+        geomOut={}
+        k=-1
+        while not geomOut and k<red:
+            k+=1
+            #geomRemain=lstGeomRemain[k] # RAM issue: Segmentation fault (core dumped)
+            
+            # Pair filtering
+            if not geomPair.intersects(lstGeomRemain[k]): continue
+            geomInter=geomPair.intersection(lstGeomRemain[k])
+            if geomInter.geom_type in dicTolerance['bhBadGeom']: continue
+            if geomInter.geom_type=='GeometryCollection':
+                checkBadGeom=set([part.geom_type in dicTolerance['bhBadGeom'] for part in geomInter])
+                if len(checkBadGeom)==1 and True in checkBadGeom: continue
+            if geomInter.area<dicTolerance['bhAreaInter']: continue
+
+            j[k]+=1
+            if disp:
+                lstStdout=['-']*(red+1)
+                lstStdout[k]=str(j[k])
+                print('\t'.join(lstStdout)+'\t%.4f'% SortBH(lstPair[i]))
+            #print('i:%i-j:%i-k:%i'% (i,j[k],k))
+            if j[k]==0: SubLogger('INFO', 'Max BH (r:%i): %.4f'% (k,SortBH(lstPair[i])))
+            # Store
+            for sceneId in lstPair[i]['properties']['scenes'].split('; '):
+                setScene.add(sceneId)
+            lstPairId.append(lstPair[i]['id'])
+            lstGeomRemain[k]=lstGeomRemain[k].difference(geomPair)
+            
+            # Output
+            geomOut={"id":j[k], 
+                     "type": "Feature", 
+                     "properties": {"idStep": j[k], 
+                                    "idRed": k, 
+                                    "idOrder":i, 
+                                    "idPair": lstPair[i]['id'], 
+                                    "bh": SortBH(lstPair[i]),
+                                    }, 
+                     "geometry": {"type": 'MultiPolygon', 'coordinates':[[]]}}
+            if lstGeomRemain[k].geom_type=='Polygon':
+                lstGeomRemain[k]=MultiPolygon([lstGeomRemain[k],])
+            elif lstGeomRemain[k].geom_type=='GeometryCollection' and lstGeomRemain[k].area==0:
+                lstGeomRemain[k]=Point(0,0)
+                continue
+            elif not lstGeomRemain[k].geom_type=='MultiPolygon':
+                print(lstGeomRemain[k])
+                SubLogger('CRITICAL', 'Unknown geometry type: %s'% lstGeomRemain[k].geom_type)
+            
+            for geomCur in lstGeomRemain[k]:
+                geomOut["geometry"]["coordinates"][0].append(list(geomCur.exterior.coords))
+                if len(geomCur.interiors):
+                    for ringCur in geomCur.interiors:
+                        geomOut["geometry"]["coordinates"][0].append(list(ringCur.coords))
+                        
+            objOut["features"].append(geomOut)
+    
+    SubLogger('INFO', 'Min BH (r:%i): %.4f'% (k,SortBH(lstPair[i])))
+    if i==nbPair-1: SubLogger('WARNING', 'Not enough stereopairs to fill the AOI')
+    # Output file
+    with open(pathOut, 'w') as fileOut:
+        fileOut.write(json.dumps(objOut, indent=2))
+
+    # Update object
+    lstDel=[i for i in range(len(lstBCoupleCur)) if not lstBCoupleCur[i]['id'] in lstPairId]
+    for i,j in enumerate(lstDel):
+        del lstBCoupleCur[j-i]
+    lstDel=[i for i in range(len(lstBFeatCur)) if not lstBFeatCur[i]['id'] in setScene]
+    for i,j in enumerate(lstDel):
+        del lstBFeatCur[j-i]
+    
+def SortBH(a):
+    return a['properties']['bh']
 
 #=======================================================================
 #main

@@ -23,7 +23,9 @@ __all__ =['urlSearch',
           'tempGeojson',
           'tempDescripPair',
           'profileCoverTif',
+          'dicUnits',
           'imageGsd',
+
           ]
 
 ## SSBP
@@ -37,7 +39,10 @@ methodF=('fp','bh') # Filter method
 rdpEpsi=1e-2 # Douglas peuker epsilon
 dicTolerance={'geom': 0.8, # percentage of overlap
               'quali': ('standard','test'), # list of quality (best to worst)
-              'satAz': 10 # similarity angle
+              'satAz': 10, # similarity angle
+              'bhAreaPair': 1e-3, # minimum pair area for BH filtering
+              'bhAreaInter': 1e-7, # minimum intersection area for BH filtering: must be small
+              'bhBadGeom': ('Point', 'MultiPoint', 'LineString', 'MultiLineString') # bad intresection geometry to discard
                 }
 
 # Desciptor variables
@@ -53,9 +58,15 @@ tempGeojson={"type": "FeatureCollection",
                 }
 tempDescripPair={"type": "Feature",
             "id": -1,
-            "properties":{'type':'', 'nbScene': '','scenes':'', 'area':0 },
+            "properties":{'id': 0, 'type':'', 'nbScene': '','scenes':'', 'area':0 },
             "geometry": {"type": "Polygon", "coordinates":[]}}
 profileCoverTif={'driver': 'GTiff', 'dtype': 'uint8', 'nodata': 0, 'width': 0, 'height': 0, 'count': 1, 'compress': 'lzw', 'crs': 0, 'transform': 0}
+dicUnits={'alt': 'km',
+                 'lat': 'deg',
+                 'lng': 'deg',
+                 'off_nadir': 'deg',
+                 'satellite_azimuth_mean': 'deg',
+                 }
 imageGsd=1e-4 # outcoming image gsd 1e-4[°]=[m]/6371e3*180/pi ~10[m]
 
 ## PCT

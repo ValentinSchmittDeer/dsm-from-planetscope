@@ -2,13 +2,14 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys
+from math import pi
 import json
 import logging
 from pprint import pprint
 import numpy as np
 from numpy.linalg import inv
 
-from PVL.PVL_Logger import SetupLogger, SubLogger
+from OutLib.LoggerFunc import *
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -693,7 +694,6 @@ def Geo2Cart_Elli(ptGeo,elliAF='WGS84'):
     
     ptsOut=matNH*matTriP*matTriL
     
-    return n
     return ptsOut.T
 
 #=======================================================================
