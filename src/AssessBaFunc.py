@@ -6,11 +6,10 @@ from pprint import pprint
 from glob import glob
 import numpy as np
 
-# PyValLib packages
-from PVL.PVL_Logger import SetupLogger, ProcessStdout
-from PVL.PVL_Rpc import *
-
 # dsm_from_planetscope libraries
+from OutLib.LoggerFunc import *
+from BlockProc import GeomFunc
+
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
@@ -122,12 +121,12 @@ if __name__ == "__main__":
         # Retrieval of arguments
         #---------------------------------------------------------------
         #Positional input
-        parser.add_argument('-init', required=True, help='path to initial setting (ProcData')
+        parser.add_argument('-init', required=True, help='path to initial setting (ProcData)')
         parser.add_argument('-ba',required=True ,nargs='+' ,help='path to next BA folder in the right order')
         
         #Optional arguments
-        parser.add_argument('-noGraph',action='store_false',help='Do not return the graph (intactive graph with matplotlib)')
-        parser.add_argument('-noTable',action='store_false',help='Do not return the table')
+        parser.add_argument('-graph',action='store_true',help='Return the graph (interactive graph with matplotlib)')
+        parser.add_argument('-table',action='store_true',help='Return the table')
         parser.add_argument('-longTable',action='store_true',help='Long table version (make use of scipy 1.7)')
         parser.add_argument('-s', type=int, default=100, help='Graph: scale factor')
         parser.add_argument('-ori',action='store_true',help='Graph: orienation arrow')
@@ -153,10 +152,15 @@ if __name__ == "__main__":
 
         grepTsai=os.path.join(args.init,'*.tsai')
         for pathCur in glob(grepTsai):
-            name=os.path.basename(pathCur)
-            dicTsai[name]=[ObjTsai(pathCur),]
-        
+            if os.path.basename(pathCur) in dicTsai: continue
+            
+            grepCur='_'.join(pathCur.split('_')[:-1])+'*.tsai'
+            pathIn=sorted(glob(grepCur))[-1]
+            name=os.path.basename(pathIn)
+            if name in dicTsai: continue
 
+            dicTsai[name]=[GeomFunc.ObjTsai(pathIn),]
+        
         #---------------------------------------------------------------
         # Read next steps
         #---------------------------------------------------------------
@@ -195,15 +199,12 @@ if __name__ == "__main__":
                             dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
 
 
-
-
-
         #---------------------------------------------------------------
         # Summary table
         #---------------------------------------------------------------
-        if args.noTable:
+        if args.table or args.longTable:
             # Difference table
-            logger.info('# Summary table (Differences to original state)')
+            logger.info('# Summary table (Differences)')
             Table_Line(['ImgID','Key', 'Init']+lstBaName)
             for kind in ('3DCentre', 'Direction', 'Angles', 'Focal', '2DPP'):
                 print(kind+':')
@@ -232,7 +233,7 @@ if __name__ == "__main__":
                     Table_Line([str(i),'Diff '+kind]+lstOut)
             
             # Residual table
-            logger.info('# Summary table (Residuals initial=>final)')
+            logger.info('# Summary table (Residuals)')
             Table_Line(['ImgID','Key', 'Init']+lstBaName)
             
             for kind in ('Tranlation', 'Rotation', 'KeyPoint'):
@@ -251,7 +252,7 @@ if __name__ == "__main__":
                         lstOut=['{0[resiRot-final]:.3f}'.format(obj) for obj in lstCur[1:]]
                     elif kind=='KeyPoint':
                         
-                        lstOut=['{0[resiKP-initial]:.3f} => {0[resiKP-final]:.3f} ({0[numKP-final]:.0f} : {1:.0f})'.format(obj, obj['numKP-final']-obj['numKP-initial']) for obj in lstCur[1:]]
+                        lstOut=['{0[resiKP-initial]:.3f} => {0[resiKP-final]:.3f} ({0[numKP-final]:.0f})'.format(obj) for obj in lstCur[1:]]
                     
                     Table_Line([str(i),'Resid '+kind, '/']+lstOut)
 
@@ -259,7 +260,7 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Graph
         #---------------------------------------------------------------
-        if args.noGraph:
+        if args.graph:
             logger.info('# Graph')
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D
