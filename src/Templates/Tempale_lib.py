@@ -3,7 +3,9 @@
 
 import os, sys
 import json
+
 from OutLib.LoggerFunc import *
+from VarCur import *
 
 #-----------------------------------------------------------------------
 # Hard argument

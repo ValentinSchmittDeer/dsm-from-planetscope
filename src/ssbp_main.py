@@ -67,13 +67,10 @@ def Main(args):
                     lstFeat=json.load(fileIn)
                 except json.decoder.JSONDecodeError as msg:
                     raise RuntimeError("Input search holds mistake: %s"% msg)
-            nameAoiOut=os.path.basename(args.i).split('.')[0]
-            nameSearch=os.path.basename(args.iSrch).split('.')[0]
             checkSearch=False
         else:
             checkSearch=True
-            nameSearch=nameSearchFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
-            nameAoiOut=nameAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
+            
                 
         if not os.path.isdir(args.o): raise RuntimeError("-o working directory not found")
         
@@ -120,8 +117,10 @@ def Main(args):
                 if not keyCur in lstKeySearch: del jsonParam[keyCur]
             
             jsonParam['geom']=featAoi
-
-            filterJson=searchFunc.MakeFiter(jsonParam,nameSearch)
+            
+            nameSearchFull=fileSearchFull.format(datetime.now().strftime('%Y%m%d_%H%M%S'))
+            
+            filterJson=searchFunc.MakeFiter(jsonParam,nameSearchFull)
             
             #---------------------------------------------------------------
             # Fire off request
@@ -131,11 +130,12 @@ def Main(args):
 
             #PrintPsItem(lstFeat)
 
-            # Store search
-            pathOut=os.path.join(args.o, nameAoiOut+'.geojson')
+            # Store data
+            pathOut=os.path.join(args.o, fileAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S')))
             copy2(args.i,pathOut)
 
-            pathOut= os.path.join(args.o, nameSearch+'.json')
+            pathOut= os.path.join(args.o, nameSearchFull)
+            logger.info('Saved in %s'% pathOut)
             with open(pathOut,'w') as fileOut:
                 strOut=json.dumps(lstFeat, indent=2)
                 fileOut.write(strOut)
@@ -143,7 +143,7 @@ def Main(args):
             pathOut=pathOut.replace('json','geojson')
             with open(pathOut,'w') as fileOut:
                 objOut=tempGeojson.copy()
-                objOut['name']=nameSearch
+                objOut['name']=nameSearchFull.split('.')[0]
                 objOut['features']=lstFeat.copy()
                 fileOut.write(json.dumps(objOut, indent=2))
 
@@ -183,7 +183,6 @@ def Main(args):
         #---------------------------------------------------------------
         logger.info('# Scene coupling')
         objBlocks.StereoCoupling()
-        logger.info(objBlocks)
         
         #---------------------------------------------------------------
         # Block Coverage
@@ -208,7 +207,11 @@ def Main(args):
             logger.info('# Block B/H filtering')
             filterFunc.FilterBlocks(objBlocks, 'bh', aoi=featAoi, red=args.fBHred)
             logger.info(objBlocks)
-            sys.exit()
+            
+            # Update stereo
+            logger.info('# Update scene coupling')
+            objBlocks.StereoCoupling(moreComb=True)
+
             # Update Coverage
             if args.cov:
                 logger.info('# Update Coverage')

@@ -9,6 +9,7 @@ from glob import glob
 from pprint import pprint
 
 from OutLib.LoggerFunc import *
+from VarCur import *
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -36,41 +37,55 @@ class PCTBucket:
     pathSceneID (str): scene id file
     out:
         PCTBucket (obj):
+            # Descriptor
+            bId (str): block name
             nameBuck (str): bucket name
-            level (str): scene process level
-            nbLocFeat (int): number of scene from local
-            lstLocFeat (tuple): list of scene id from local
-            exists (bool): existing bucket on cloud
-            nbCloFeat (int): number of scene from cloud
-            sizeClo (int): bucket size from cloud 
+            tupleLevel (tuple): tuple with standard names with respect to the product level
+            lstDescFeat (tuple): from desciptor, list of scene ID 
+            nbDescFeat (int): from desciptor, number of scenes
+            # Local
+            dir (str): block directory
+            dirData (str): black data directory
+            lstLocFeat (list): from local, list of scene id
+            nbLocFeat (int): from local, number of scenes
+            sizeLoc (float): from local, byte weight of the dataset
+            # Cloud
+            urlBuck (str): URL of the bucket
+            exists (bool): is the bucket on cloud (storage)
+            lstCloFeat (list): from the cloud, list of scene ID
+            nbCloFeat (int): from the cloud, number of scenes
+            sizeClo (int): from the cloud, byte weight of the dataset
+            lstCloData (list of list): list with (sceneName.tif, size, sceneName.RPC, size, sceneName.json, size ...)
     '''
-    def __init__(self, nameBlock, pathSceneID, levelCur):
-        from PCT import nameBucket, dicLevel
-        
-
+    def __init__(self, nameBlock, levelCur, lstFeat, pathWorkDir):        
+        # Descriptor
         self.bId=nameBlock
         self.nameBuck=nameBucket.format(nameBlock, levelCur)
-        #self.nameBuck='aaa_seths_test_collects_413_l1b_multispectral'
         self.tupleLevel=dicLevel[levelCur]
         
+        if not lstFeat: SubLogger('CRITICAL', 'lstFeat is empty')
+        self.lstDescFeat=tuple([feat['id'] for feat in lstFeat])
+        self.nbDescFeat=len(self.lstDescFeat)
+        
+        
         # Local
-        if not os.path.exists(pathSceneID): SubLogger('CRITICAL', 'pathSceneID not found')
-        with open(pathSceneID) as fileIn:
-            self.lstLocFeat=tuple([lineCur.strip() for lineCur in fileIn.readlines()])
-        self.nbLocFeat=len(self.lstLocFeat)
-        
-        
-        # Directory
-        self.dir=os.path.dirname(pathSceneID)
+        self.dir=os.path.join(pathWorkDir, nameBlock)
         self.dirData=os.path.join(self.dir, self.nameBuck)
+        
+        self.lstLocFeat=[]
+        extLoc=self.tupleLevel[1].replace('{}','')
         if os.path.exists(self.dirData):
             self.sizeLoc=0
-            for pathCur in glob(os.path.join(self.dirData, '*')):
-                if pathCur.endswith('json'): continue
+            grepLoc=os.path.join(self.dirData, self.tupleLevel[1].format('*'))
+            for pathCur in glob(grepLoc):
+                nameFeat=os.path.basename(pathCur).replace(extLoc, '')
+                self.lstLocFeat.append(nameFeat)
                 self.sizeLoc+=os.path.getsize(pathCur)
         else:
             self.sizeLoc=-1
-        
+        self.nbLocFeat=len(self.lstLocFeat)
+
+
         # Storage cloud
         from planet_common.client import pls_summarize, urls
         from planet_common.client import storage
@@ -91,18 +106,21 @@ class PCTBucket:
                     scene_filter=storage.SceneFilter(args=subargs))
         
         self.lstCloFeat=[]
+        self.lstCloData=[]
         self.sizeClo=0
+        extClo=self.tupleLevel[1].replace('{}','')
         try:
             for scene_json in it:
-                self.sizeClo+=scene_json['file_size']
                 if scene_json['name'].endswith('.tif'):
-                    self.lstCloFeat.append([scene_json['name'],scene_json['file_size']])
+                    self.lstCloFeat.append(scene_json['name'].replace(extClo,''))
+                    self.sizeClo+=scene_json['file_size']
+                    self.lstCloData.append([scene_json['name'],scene_json['file_size']])
                 else:
-                    grepClo=self.tupleLevel[1].replace('{}','')
+                    nb=len(self.lstCloFeat)
                     i=[j 
-                        for j in range(len(self.lstCloFeat)) 
-                            if scene_json['name'].startswith(self.lstCloFeat[j][0].replace(grepClo,''))][0]
-                    self.lstCloFeat[i]+=[scene_json['name'],scene_json['file_size']]
+                        for j in range(-1,-nb-1,-1) 
+                            if scene_json['name'].startswith(self.lstCloFeat[j])][0]
+                    self.lstCloData[i]+=[scene_json['name'],scene_json['file_size']]
             
             self.exists=True
             self.nbCloFeat=len(self.lstCloFeat)
@@ -112,24 +130,25 @@ class PCTBucket:
             self.sizeClo=-1
 
     def __str__(self):
+        #ljust(
         strOut='{obj.nameBuck} (exist: {obj.exists})\n'.format(obj=self)
-        strOut+='       |  Local  |  Cloud  |\n'
-        strOut+='Nb Feat|  {obj.nbLocFeat:5}  |  {obj.nbCloFeat:5}  |\n'.format(obj=self)
+        strOut+='       |   Descr  |   Cloud  |   Local  |\n'
+        strOut+='Nb Feat|{obj.nbDescFeat:^10d}|{obj.nbCloFeat:^10d}|{obj.nbLocFeat:^10d}|\n'.format(obj=self)
         
-        sizeTup=[self.sizeLoc,self.sizeClo]
-        sizeFact=[]
+        lstSize=[self.sizeClo, self.sizeLoc]
+        lstStr=['','']
         for i in range(2):
             j=0
-            while sizeTup[i]>1024:
-                sizeTup[i]/=1024
+            while lstSize[i]>1024:
+                lstSize[i]/=1024
                 j+=1
-            sizeFact.append(('B','KB','MB','GB')[j])
-        strOut+='Size   |  {0[0]:.1f}{1[0]} |  {0[1]:.1f}{1[1]} |'.format(sizeTup,sizeFact)
+            lstStr[i]='%.1f %s'% (lstSize[i],('B','KB','MB','GB')[j])
+        strOut+='Size   |    /     |{0[0]:^10s}|{0[1]:^10s}|'.format(lstStr)
         return strOut
 
     def Match(self):
         '''
-        Check the equivalence between local files and cloud bucket
+        Check the equivalence between descriptor, cloud bucket and local files
 
         out:
             match (bool): local desciptor and cloud bucket match
@@ -138,34 +157,36 @@ class PCTBucket:
             SubLogger('ERROR', 'cloud bucket not found')
             return False
 
-        if not self.nbCloFeat==self.nbLocFeat:
-            SubLogger('ERROR', 'different scene numbers')
-            return False
-
-        from PCT import nameFeat
-        grepLoc=nameFeat.replace('{}','')
-        grepClo=self.tupleLevel[1].replace('{}','')
+        match=True
+        SubLogger('INFO', 'Descriptor to Cloud')
+        # Number
+        if not self.nbDescFeat==self.nbCloFeat: 
+            SubLogger('ERROR', 'different scene number')
+            match=False
+        # Descriptor 2 Cloud
+        count=[1 for itemDesc in self.lstDescFeat 
+                    if itemDesc in self.lstCloFeat]
+        if not self.nbDescFeat==sum(count): 
+            SubLogger('ERROR', 'missing scene on the cloud')
+            match=False
         
-        countLoc=[1 
-                    for itemLoc in self.lstLocFeat 
-                        if itemLoc.replace(grepLoc,grepClo) in [i for i,j,k,l in self.lstCloFeat]]
-        if not self.nbLocFeat==sum(countLoc):
-            SubLogger('ERROR', 'missing scenes on cloud bucket')
-            return False
-
-        countClo=[1 
-                    for itemClo,j,k,l in self.lstCloFeat 
-                        if itemClo.replace(grepClo,grepLoc) in self.lstLocFeat]
-        
-        if not self.nbCloFeat==sum(countClo):
-            SubLogger('ERROR', 'additional scenes on cloud bucket')
-            return False
-
+        SubLogger('INFO', 'Cloud to Local')
+        # Number
+        if not self.nbCloFeat==self.nbLocFeat: 
+            SubLogger('ERROR', 'different scene number')
+            match=False
+        # Cloud 2 Local
+        count=[1 for itemClo in self.lstCloFeat 
+                    if itemClo in self.lstLocFeat]
+        if not self.nbDescFeat==sum(count): 
+            SubLogger('ERROR', 'missing scene on the cloud')
+            match=False
+        # Size
         if not self.sizeLoc==self.sizeClo:
-            SubLogger('ERROR', 'cloud and local with different size')
-            return False
+            SubLogger('ERROR', 'different size')
+            match=False
 
-        return True
+        return match
         
     def List(self):
         '''
@@ -179,27 +200,20 @@ class PCTBucket:
             SubLogger('ERROR', 'cloud bucket not found')
             return False
 
-        from PCT import dicLevel, nameFeat
-        grepLoc=nameFeat.replace('{}','')
-        grepClo=self.tupleLevel[1].replace('{}','')
-        lstDirData=[os.path.basename(pathCur) for pathCur in glob(os.path.join(self.dirData, '*'))]
-
-        strOut='Descriptor => Cloud => Local\n{0} => {1} => {1}\n'.format(grepLoc,grepClo)
-        # Descriptor
-        for itemLoc in self.lstLocFeat:
-            strOut+=itemLoc.replace(grepLoc,'')
-            
-            # Cloud bucket
-            if itemLoc.replace(grepLoc,grepClo) in [i for i,j,k,l in self.lstCloFeat]:
-                strOut+=' => %s'% itemLoc.replace(grepLoc,'')
-            
-            # Local directory   
-            if itemLoc.replace(grepLoc,grepClo) in lstDirData:
-                strOut+=' => %s'% itemLoc.replace(grepLoc,'')
-
+        strOut='|       Descriptor       | Cloud | Local |\n'
+        strOUt='|                    |{0:s}|{0:s}|\n'.format(self.tupleLevel[1].replace('{}',''))
+        for itemDesc in self.lstDescFeat:
+            strOut+='|{0:<24s}|'.format(itemDesc)
+            if itemDesc in self.lstCloFeat:
+                strOut+='{0:^7s}|'.format('ok')
+            else:
+                strOut+='{0:^7s}|'.format('-')
+            if itemDesc in self.lstLocFeat:
+                strOut+='{0:^7s}|'.format('ok')
+            else:
+                strOut+='{0:^7s}|'.format('-')
             strOut+='\n'
 
-        strOut+='\nMatch: %s'% self.Match()
         return strOut
 
     def Create(self):
@@ -210,17 +224,16 @@ class PCTBucket:
         out:
             out (bool): return code 0=ok, 1=error
             PCTBucket (obj): updated object
-                batchId (str):
+                batchId (str): job system batch ID
+                batchUrl (str): URL of the job system batch
         '''
-        # Create job system batch
         if self.exists:
             SubLogger('ERROR', 'cloud bucket already exists')
             return True
 
-        from PCT import nameJobFile, nameFeat
         from planet_common.client import jobs, urls
 
-        # Job system batch
+        # Create job system batch
         self.batchId = jobs.create_batch(submitter="valentin", description=self.nameBuck)
         #self.batchId = 1002409971
         SubLogger('INFO', '%s created by job batch %s'% (self.nameBuck, self.batchId))
@@ -241,26 +254,25 @@ class PCTBucket:
         fileOut.write('Bucket URL: %s\n'% self.urlBuck)
         fileOut.write('Batch ID: %s\n'% self.batchId)
         fileOut.write('Batch URL: %s\n'% self.batchUrl)
-        fileOut.write('Batch Status: plj_query.py -c pl --limit %i --batch %s\n'% (self.nbLocFeat+10, self.batchId))
-        fileOut.write('\nCommands (%i):\n'% self.nbLocFeat)
+        fileOut.write('Batch Status: plj_query.py -c pl --limit %i --batch %s\n'% (self.nbDescFeat+10, self.batchId))
+        fileOut.write('\nCommands (%i):\n'% self.nbDescFeat)
 
         # Upload processes
-        grepLoc=nameFeat.replace('{}','')
-        grepClo=self.tupleLevel[1].replace('{}','')
-
-        procBar=ProcessStdout(name='Upload processes',inputCur=self.nbLocFeat)
-        for i in range(self.nbLocFeat):
+        procBar=ProcessStdout(name='Upload processes',inputCur=self.nbDescFeat)
+        for i in range(self.nbDescFeat):
             procBar.ViewBar(i)
-            featID=self.lstLocFeat[i]
-            if featID.replace(grepLoc,grepClo) in [i for i,j,k,l in self.lstCloFeat]: continue
+            itemDesc=self.lstDescFeat[i]
+            if itemDesc in self.lstCloFeat: 
+                fileOut.write(itemDesc+': exists\n')
+                continue
 
-            fileOut.write(featID+': ')
+            fileOut.write(itemDesc+': ')
 
             strSubArgs='cmo -c pl --product={levelCode} --output-storage-bucket={bucketCur} --disable-cache-read --disable-cache-write --input-bucket={bucketIn} --input-scene={sceneId} --udm disabled --xml disabled'.format(
                         levelCode=self.tupleLevel[2],
                         bucketCur=self.nameBuck,
                         bucketIn='flock1',
-                        sceneId=featID)
+                        sceneId=itemDesc+extSceneIn)
             lstArgs=['-c', 'pl', '-q',
                     '--quota-ram-mb=7200', 
                     '--timeout=7200', 
@@ -274,24 +286,8 @@ class PCTBucket:
             os.system(cmd)
 
         fileOut.close()
+        print()
         return False
-
-    def Download_old(self):
-        '''
-        Download the bucket to a folder data_<level>
-
-        out:
-            out (bool): return code 0=ok, 1=error
-        '''
-        if os.path.exists(self.dirData):
-            SubLogger('ERROR', 'Local data directory already exists')
-            return True
-        os.mkdir(self.dirData)
-
-        cmd='cur=$(pwd) ; cd {dir} ; pls.py download -c pl --fast-skip {bucket} ; cd $cur'.format(dir=pathDataDir,
-                                                                                            bucket=self.nameBuck)
-        print(cmd)
-        os.system(cmd)
 
     def Down(self):
         '''
@@ -304,29 +300,31 @@ class PCTBucket:
             SubLogger('ERROR', 'cloud bucket not found')
             return True
 
-        from PCT import nameFeat
-        grepLoc=nameFeat.replace('{}','')
-        grepClo=self.tupleLevel[1].replace('{}','')
-
         if not os.path.exists(self.dirData): os.mkdir(self.dirData)
         
-        procBar=ProcessStdout(name='Download features',inputCur=self.nbCloFeat)
-        for i in range(self.nbCloFeat):
+        procBar=ProcessStdout(name='Download features',inputCur=self.nbDescFeat)
+        for i in range(self.nbDescFeat):
             procBar.ViewBar(i)
-            
-            if not self.lstCloFeat[i][0].replace(grepClo,grepLoc) in self.lstLocFeat: continue
+            itemDesc=self.lstDescFeat[i]
+            itemName=self.tupleLevel[1].format(itemDesc)
+
+            if not itemDesc in self.lstCloFeat: 
+                SubLogger('WARNING', 'Scene not found on the cloud bucket: %s'% itemDesc)
+                continue
+
+            tupCloData=[item for item in self.lstCloData if itemName==item[0]][0]
+            if not tupCloData: SubLogger('CRITICAL', 'Devlopment issue')
 
             cmd='cur=$(pwd) ; cd %s '% self.dirData
-            for j in range(len(self.lstCloFeat[i])):
-                if not type(self.lstCloFeat[i][j])==str: continue
-                featCloId=self.lstCloFeat[i][j]
+            for j in range(len(tupCloData)):
+                if not type(tupCloData[j])==str: continue
                 
-                pathLocFeat=os.path.join(self.dirData,featCloId)
-                if os.path.exists(pathLocFeat) and os.path.getsize(pathLocFeat)==self.lstCloFeat[i][j+1]: continue
+                pathLocFeat=os.path.join(self.dirData,tupCloData[j])
+                if os.path.exists(pathLocFeat) and os.path.getsize(pathLocFeat)==tupCloData[j+1]: continue
 
                 cmd+='; pls.py download -c pl -q {bucket} {sceneId}'.format(
                         bucket=self.nameBuck,
-                        sceneId=featCloId)
+                        sceneId=tupCloData[j])
             
             if len(cmd.split(';'))==2: continue
             cmd+=' ; cd $cur'

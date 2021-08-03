@@ -5,15 +5,14 @@ import os, sys, argparse, time
 from glob import glob
 from pprint import pprint
 
-# PyValLib packages
-from PVL.PVL_Logger import SetupLogger, ProcessStdout
-from PVL.PVL_Rpc import *
 
 # dsm_from_planetscope libraries
-from SSBP.SSBPlib_block import SceneBlocks
-from PCT import *
-from ASfM.ASfMlib_asp import AspUtility as AspObj
-from ASfM import *
+from OutLib.LoggerFunc import *
+from VarCur import *
+from SSBP.blockFunc import SceneBlocks 
+#from PCT import *
+from BlockProc import *
+
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
@@ -66,14 +65,13 @@ if __name__ == "__main__":
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
+        print()
         
         #---------------------------------------------------------------
-        # Check planet_common and docker
+        # ASP Python interface
         #---------------------------------------------------------------
-        logger.info('# Check planet_common and docker ')
-        if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
-        
-        asp=AspObj()
+        logger.info('# ASP Python interface')        
+        asp=ASP.AspPython()
         
         #---------------------------------------------------------------
         # Read Repo
@@ -90,8 +88,7 @@ if __name__ == "__main__":
         for iB in lstLoop:
             bId, nbFeat= objBlocks.lstBId[iB]
             logger.info(bId)
-            pathDict=ASfMlib_ba.BlockPathDict(args.i, bId, args.dem)
-            
+            objPath=PathCur(args.i, bId, args.dem)
 
             #---------------------------------------------------------------
             # Camera creation
@@ -99,24 +96,23 @@ if __name__ == "__main__":
             #logger.info('# Camera creation')
             procBar=ProcessStdout(name='Scene and camera creation',inputCur=nbFeat)
             for j in range(nbFeat):
-                if not j in (7, 8, 9, 13, 14, 15): continue
                 procBar.ViewBar(j)
                 
-                subArgs=ASfMlib_ba.CameraParam(pathDict, objBlocks.lstBFeat[iB][j])
+                subArgs=ASfMFunc.SubArgs_Camgen(objPath, objBlocks.lstBFeat[iB][j])
                 asp.cam_gen(subArgs)
-
-                subArgs=ASfMlib_ba.ConvertCameraParam(pathDict, objBlocks.lstBFeat[iB][j])
+                
+                subArgs=ASfMFunc.SubArgs_ConvertCam(objPath, objBlocks.lstBFeat[iB][j])
                 asp.convert_pinhole_model(subArgs)
                 
             print()
-
+            
             #---------------------------------------------------------------
             # Orbit visualisation
             #---------------------------------------------------------------
             logger.info('# Orbit visualisation')
-            regexProcImg= os.path.join(pathDict['pProcData'], '*.tif')
-            regexProcCam= os.path.join(pathDict['pProcData'], nameTsai1.format('*'))
-            pathOut= os.path.join(pathDict['pB'],'%s_InitialCam.kml'% bId)
+            regexProcImg= os.path.join(objPath.pProcData, '*.tif')
+            regexProcCam= os.path.join(objPath.pProcData, objPath.nTsai[1].format('*'))
+            pathOut= objPath.pOrbit
             subArgs=(regexProcImg,
                     regexProcCam,
                     '-o', pathOut,
@@ -126,48 +122,43 @@ if __name__ == "__main__":
                 logger.info('Overwrite %s'% os.path.basename(pathOut))
             asp.orbitviz(subArgs)
             
+            
             #---------------------------------------------------------------
             # Bundle adjustment series
             #---------------------------------------------------------------
-            pathPairTxt=ASfMlib_ba.StereoPairDescriptor(pathDict, objBlocks.lstBCouple[iB])
-
-            argsCur=ASfMlib_ba.BunAdjParam(glob(regexProcImg), args.dem, pathPairTxt)
-
+            pathPairTxt=ASfMFunc.StereoDescriptor(objPath, objBlocks.lstBCouple[iB])
+            
+            subArgs=ASfMFunc.SubArgs_BunAdj(objPath, glob(regexProcImg))
+            
             #---------------------------------------------------------------
             # Key point extraction
             #---------------------------------------------------------------
-            folderKP=os.path.dirname(pathDict['baKP'])
+            folderKP=os.path.dirname(objPath.prefKP)
             if not os.path.exists(folderKP):
                 logger.info('# Key point extraction')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.KeyPoints(pathDict['pProcData'], pathDict['baKP']))
-
+                asp.parallel_bundle_adjust(subArgs.KeyPoints(objPath.pProcData, objPath.prefKP))
+                ASfMFunc.KpCsv2Geojson(objPath.prefKP)
+            
             #---------------------------------------------------------------
             # EO adjustment
             #---------------------------------------------------------------
-            if ASfMlib_ba.CopyPrevBA(pathDict['baKP'], pathDict['baEO']):
+            #input('EO')
+            if ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefEO):
                 logger.info('# EO adjustment')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.EO(pathDict['baKP'], pathDict['baEO']))
+                asp.parallel_bundle_adjust(subArgs.EO(objPath.prefKP, objPath.prefEO))
+                ASfMFunc.KpCsv2Geojson(objPath.prefEO)
                         
             #---------------------------------------------------------------
             # IO adjustment
             #---------------------------------------------------------------
-            if ASfMlib_ba.CopyPrevBA(pathDict['baEO'], pathDict['baIO'], gcp=True):
+            #input('IO')
+            if ASfMFunc.CopyPrevBA(objPath.prefEO, objPath.prefIO, gcp=True):
                 logger.info('# IO adjustment')
-                input('ENTER\n')
-                asp.bundle_adjust(argsCur.IO(pathDict['baEO'], pathDict['baIO']))
+                asp.parallel_bundle_adjust(subArgs.IO(objPath.prefEO, objPath.prefIO))
+                ASfMFunc.KpCsv2Geojson(objPath.prefIO)
             
-            ASfMlib_ba.ExportCam(pathDict['baIO'], pathDict['pProcData'])
-            
-            logger.warning("Normalise function name in ..._ba")
-
-
-
-        
-        
-        
-        
+            #ASfMlib_ba.ExportCam(pathDict['baIO'], pathDict['pProcData'])
+              
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------

@@ -50,7 +50,7 @@ def FilterBlocks(objIn, fType, lstBName=False, aoi=None, red=None):
             if red is None: SubLogger('CRITICAL', 'BH filtering needs a redundancy (red)')
             if not 'lstBCouple' in objIn.__dir__(): SubLogger('CRITICAL', 'BH filtering needs stereo pairs')
             
-            pathOut=os.path.join(objIn.dirOut, objIn.lstBId[bI][0], nameBFile.format(objIn.lstBId[bI][0], 'BHfTrack.geojson'))
+            pathOut=os.path.join(objIn.dirOut, objIn.lstBId[bI][0], fileBHfTrack.format(objIn.lstBId[bI][0]))
             Filter_BHratio(objIn.lstBFeat[bI], objIn.lstBCouple[bI], aoi, red, pathOut)
             
         objIn.lstBId[bI]=(objIn.lstBId[bI][0], len(objIn.lstBFeat[bI]))
@@ -210,17 +210,18 @@ def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
     must include the B/H ratio (from extented MD)
 
     lstBFeatCur (list): list of scene descriptors to update
-    lstBCoupleCur (list): list of stereopair to update
+    lstBCoupleCur (list): list of stereopair
     aoiIn (geojson): AOI shape
     red (int): number of redundancy (0 means single coverage)
     pathOut (str): path of the tacking file
     disp (bool): display the tracking map (default: False)
     out:
-        (updated objects)
+        objBlock (class): updated object
+            lstBFeatCur (list): Updated list of scene descriptors
     '''
     geomAoi=Polygon(aoiIn['features'][0]['geometry']['coordinates'][0][0])
     
-    lstPair=sorted(lstBCoupleCur, key=SortBH, reverse=True)
+    lstPair=sorted([pair for pair in lstBCoupleCur if pair['properties']['nbScene']==2], key=SortBH, reverse=True)
     nbPair=len(lstPair)
 
     # Redundancy management
@@ -262,7 +263,7 @@ def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
             #print('i:%i-j:%i-k:%i'% (i,j[k],k))
             if j[k]==0: SubLogger('INFO', 'Max BH (r:%i): %.4f'% (k,SortBH(lstPair[i])))
             # Store
-            for sceneId in lstPair[i]['properties']['scenes'].split('; '):
+            for sceneId in lstPair[i]['properties']['scenes'].split(';'):
                 setScene.add(sceneId)
             lstPairId.append(lstPair[i]['id'])
             lstGeomRemain[k]=lstGeomRemain[k].difference(geomPair)
@@ -300,10 +301,11 @@ def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
     with open(pathOut, 'w') as fileOut:
         fileOut.write(json.dumps(objOut, indent=2))
 
-    # Update object
-    lstDel=[i for i in range(len(lstBCoupleCur)) if not lstBCoupleCur[i]['id'] in lstPairId]
-    for i,j in enumerate(lstDel):
-        del lstBCoupleCur[j-i]
+    # Update object: stereo combinaison updeated by new run of stereo coupling
+    #lstDel=[i for i in range(len(lstBCoupleCur)) if not lstBCoupleCur[i]['id'] in lstPairId]
+    #for i,j in enumerate(lstDel):
+    #    del lstBCoupleCur[j-i]
+    
     lstDel=[i for i in range(len(lstBFeatCur)) if not lstBFeatCur[i]['id'] in setScene]
     for i,j in enumerate(lstDel):
         del lstBFeatCur[j-i]

@@ -6,96 +6,49 @@ import json
 import logging
 from glob import glob
 from pprint import pprint
-from PVL.PVL_Logger import SetupLogger, SubLogger
+from importlib.util import find_spec
+moduleSpec=find_spec('planet_opencv3')
+if moduleSpec:
+    from planet_opencv3 import cv2 as cv
+else:
+    import cv2 as cv
 
+from OutLib.LoggerFunc import *
+from VarCur import *
 
 #-----------------------------------------------------------------------
 # Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['BlockPathDict', 'CameraParam', 'ConvertCameraParam', 'SingleBandImg', 'BunAdjParam', 'StereoPairDescriptor']
+__all__ =['SubArgs_Camgen', 'SubArgs_ConvertCam', 'SubArgs_BunAdj', 'SingleBandImg',  'StereoDescriptor']
 SetupLogger(name=__name__)
-
+#SubLogger('ERROR', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def BlockPathDict(pathDir, bId, pathDem):
-    '''
-    Create a dictonary with all needed path related to the block name
-    
-    pathDir (str): path repository with all blocks in
-    dId (str): block ID (name)
-    out:
-        dicOut (dict): dictionary with path as value
-            pB:
-            pDem:
-            pData:
-            pProcData:
-            l: product level
-            lTup: 
-            baKP:
-            baEO:
-            baIO:
-
-
-    '''
-    from ASfM import nameProcData
-    from PCT import nameBucket, dicLevel
-
-    lstFolder=glob(os.path.join(pathDir, bId, nameBucket.format('*','*')))
-    if not lstFolder: 
-        SubLogger(logging.ERROR, 'Data are not found locally')
-        return True
-    lstFolder.sort()
-    pathData=lstFolder[0]
-    pathProcData=nameProcData.format(pathData)
-    if not os.path.exists(pathProcData): os.mkdir(pathProcData)
-
-    level=pathData.split('_')[-1]
-    if not level in dicLevel.keys():
-        SubLogger(logging.ERROR, 'Level unknown')
-        return True
-
-    dicOut= {'pB': os.path.join(pathDir, bId),
-            'pDem': pathDem,
-            'pData': pathData,
-            'pProcData': pathProcData,
-            #'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
-            'l': level,
-            'lTup': dicLevel[level],
-            'baKP': os.path.join(pathDir, bId, 'ASP-KeyPoints','KP'),
-            'baEO': os.path.join(pathDir, bId, 'ASP-Extrinsic','EO'),
-            'baIO': os.path.join(pathDir, bId, 'ASP-Intrinsic','IO'),
-            }
-    return dicOut
-
-def CameraParam(pathDic, featCur):
+def SubArgs_Camgen(pathObj, featCur):
     '''
     Create a dictionary of cam_gen parameters
 
-    pathDic (dict): BlockPathDict result
+    pathObj (obj): PathCur clas from VarCur
     featCur (json): current feature desciptor
     out:
-        subArgs (dict): argument dictionary
+        subArgs (list): argument list
     '''
-    from ASfM import nameProcDataImg, nameTsai0
-
-    # Initial files
+    # Initial file
     idImg=featCur['id']
-    nameImgInit=pathDic['lTup'][1].format(idImg)
-    pathImgInit=os.path.join(pathDic['pData'], nameImgInit)
-    if not os.path.exists(pathImgInit): SubLogger(logging.ERROR, 'Initial image file not found, %s'% pathImgInit)
+    pathImgInit=os.path.join(pathObj.pData, pathObj.extFeat.format(idImg))
+    if not os.path.exists(pathImgInit): SubLogger('ERROR', 'Initial image file not found, %s'% pathImgInit)
 
     pathRpcInit=pathImgInit[:-4]+'_RPC.TXT'
-    if not os.path.exists(pathRpcInit): SubLogger(logging.ERROR, 'Initial RPC file not found, %s'% pathRpcInit)
+    if not os.path.exists(pathRpcInit): SubLogger('ERROR', 'Initial RPC file not found, %s'% pathRpcInit)
 
-    # New files
-    nameImg1B=nameProcDataImg.format(nameImgInit.split('.')[0])
-    pathImg1B=os.path.join(pathDic['pProcData'],nameImg1B)
+    # New file
+    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
     if not os.path.exists(pathImg1B): SingleBandImg(pathImgInit, pathImg1B)
     
-    pathTsai=nameTsai0.format(pathImg1B.split('.')[0])
+    pathTsai=pathObj.nTsai[0].format(pathImg1B.split('.')[0])
     if os.path.exists(pathTsai): return 0
 
     pathGcp=pathTsai[:-4]+'gcp'
@@ -103,13 +56,13 @@ def CameraParam(pathDic, featCur):
     # Arguments
     subArgs=[ pathImg1B,
             '--refine-camera',
-            '--reference-dem', pathDic['pDem'],
-            '--optical-center', '3300 2178',
-            '--focal-length', '127272.7272',
-            '--pixel-pitch', '1',
+            '--reference-dem', pathObj.pDem,
+            '--optical-center', camCentre,
+            '--focal-length', camFocal,
+            '--pixel-pitch', camPitch,
             '-o', pathTsai,
-            '--gcp-file', pathGcp,
-            '--gcp-std', '10',
+            #'--gcp-file', pathGcp,
+            #'--gcp-std', '10',
             '--camera-type', 'pinhole',
             '--input-camera',pathRpcInit,
             '-t', 'rpc'
@@ -117,52 +70,31 @@ def CameraParam(pathDic, featCur):
     
     return subArgs
 
-def SingleBandImg(pathIn, pathOut):
-    '''
-    Convert all images in the folder to a single band image using the HLS
-    colour scpace transformaton.
-    openCV tool : cvtColor(src, bwsrc, cv::COLOR_RGB2HLS)
-    or 
-    matrices average (instead of opencv max-min mean)
-
-    include max StdDev band (for all images) selection with gdal
-    include multiproc
-    '''
-    pass
-    cmd='gdal_translate -b 2 -q %s %s'% (pathIn, pathOut)
-    out=os.system(cmd)
-    return out
-
-def ConvertCameraParam(pathDic, featCur):
+def SubArgs_ConvertCam(pathObj, featCur):
     '''
     Create a dictionary of convert_pinhole_model parameters
 
     pathDic (dict): BlockPathDict result
     featCur (json): current feature desciptor
     out:
-        subArgs (dict): argument dictionary
+        subArgs (list): argument list
     '''
-    from ASfM import nameProcDataImg, nameTsai0, nameTsai1
-    typeCam='RPC'
-
     # Initial files
     idImg=featCur['id']
-    nameImgInit=pathDic['lTup'][1].format(idImg)
-    nameImg1B=nameProcDataImg.format(nameImgInit.split('.')[0])
-    pathImg1B=os.path.join(pathDic['pProcData'],nameImg1B)
-    if not os.path.exists(pathImg1B): SubLogger(logging.ERROR, 'Initial image file not found, %s'% pathImg1B)
+    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
+    if not os.path.exists(pathImg1B): SubLogger('ERROR', 'Initial image file not found, %s'% pathImg1B)
     
-    pathTsai0=nameTsai0.format(pathImg1B.split('.')[0])
-    if not os.path.exists(pathTsai0): SubLogger(logging.ERROR, 'Initial tsai file not found, %s'% pathTsai0)
+    pathTsai0=pathObj.nTsai[0].format(pathImg1B.split('.')[0])
+    if not os.path.exists(pathTsai0): SubLogger('ERROR', 'Initial tsai file not found, %s'% pathTsai0)
 
     # New files
-    pathTsai1=nameTsai1.format(pathImg1B.split('.')[0])
+    pathTsai1=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
     if os.path.exists(pathTsai1): return 0
     
     # Arguments
     subArgs=[ pathImg1B,
             pathTsai0,
-            '--output-type', 'RPC', # distortion model
+            '--output-type', camDist, # distortion model
             # <TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
             '--rpc-degree', '2', # RPC degree
             '--sample-spacing', '100', # number of pixel for distortion modeling 
@@ -171,42 +103,7 @@ def ConvertCameraParam(pathDic, featCur):
     
     return subArgs
 
-def StereoPairDescriptor(pathDict, lstPairs):
-    from ASfM import nameProcDataImg, nameTsai1, namePairDescip
-    
-    # Availability
-    extImg=nameProcDataImg.format(pathDict['lTup'][1].split('.')[0])
-    extImgStr=extImg.replace('{}','')
-    grepImg=os.path.join(pathDict['pProcData'], extImg.format('*'))
-    lstImgAvai=[os.path.basename(pathCur).replace(extImgStr,'') for pathCur in glob(grepImg)]
-    lstImgAvai.sort()
-
-    extTsai=nameTsai1.format(extImg.split('.')[0])
-    extTsaiStr=extTsai.replace('{}','')
-    grepTsai=os.path.join(pathDict['pProcData'], extTsai.format('*'))
-    lstTsaiAvai=[os.path.basename(pathCur).replace(extTsaiStr,'') for pathCur in glob(grepTsai)]
-    lstTsaiAvai.sort()
-
-    # Production Check
-    if not len(lstImgAvai)==len(lstTsaiAvai): SubLogger(logging.CRITICAL, 'Not same number of image (%i) and camera (%i) files in %s'% (len(lstImgAvai), len(lstTsaiAvai), pathDict['pProcData']))
-    if not lstImgAvai==lstTsaiAvai: SubLogger(logging.CRITICAL, 'Not identical image and camera files in %s'% pathDict['pProcData'])
-
-    lstOut=[]
-    for pair in lstPairs:
-        if not pair['properties']['scene1'] in lstImgAvai or not pair['properties']['scene2'] in lstImgAvai: continue
-
-        path1= os.path.join(pathDict['pProcData'], extImg.format(pair['properties']['scene1']))
-        path2= os.path.join(pathDict['pProcData'], extImg.format(pair['properties']['scene2']))
-        strOut='%s %s'% (path1,path2)
-        lstOut.append(strOut)
-    
-    pathOut=os.path.join(pathDict['pB'], namePairDescip.format(os.path.basename(pathDict['pB'])))
-    with open(pathOut, 'w') as fileOut:
-                    fileOut.write('\n'.join(lstOut))
-    return pathOut
-
-
-class BunAdjParam:
+class SubArgs_BunAdj:
     '''
     Documentation at the end of the script
     '''
@@ -219,6 +116,7 @@ class BunAdjParam:
                 # Caution cannot be coupled with --inline-adj (so no distortion)
                 
                 ## Key points
+                '--min-matches', '10', # min key point pairs
                 
                 ## Model: 'Any weight set in the model must balance another one (never a single weight)'
                 '--disable-pinhole-gcp-init', # do initialise camera from GCP files
@@ -228,25 +126,30 @@ class BunAdjParam:
                 ## Least square
                 
                 ## Storage
-                '--report-level', '20',
+                #'--report-level', '20',
                 '--save-cnet-as-csv', # Save key points in gcp point format
                 '--inline-adjustments', # Store result in .tsai, not in adjsut
                 ]
 
-    def __init__(self, lstImg, pathDem, pathPairTxt):
-        from ASfM import nameTsai1
-
-        if not type(pathDem)==str: SubLogger(logging.CRITICAL, 'DEM path must a a string')
-        self.pathDem=pathDem
-        if not type(lstImg)==list or False in [type(pathCur)==str for pathCur in lstImg]: SubLogger(logging.CRITICAL, 'Image list (lstImg) must be a list of path')
+    def __init__(self, pathObj, lstImg):
+        self.pathDem=pathObj.pDem
+        
+        # Scenes
+        if not type(lstImg)==list or False in [type(pathCur)==str for pathCur in lstImg]: SubLogger('CRITICAL', 'Image list (lstImg) must be a list of path')
         self.nbScene=len(lstImg)
         lstImg.sort()
         self.argsInit+=lstImg
-        self.argsInit+=['--overlap-list', pathPairTxt,] # stereopair file for key point extraction
+        
+        # Stereo
+        self.argsInit+=['--overlap-list', pathObj.pStereoLst,] # stereopair file for key point extraction
             #OR
         #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
-        lstImgName=[os.path.basename(pathCur).split('.')[0] for pathCur in lstImg]
-        self.lstTsaiName=[nameTsai1.format(nameCur) for nameCur in lstImgName]
+        
+        # Cameras
+        self.lstTsaiName=[pathObj.nTsai[1].format(
+                            os.path.basename(pathCur).split('.')[0]
+                            ) 
+                                for pathCur in lstImg]
         
     def KeyPoints(self, prefIn, prefOut):
         strInd=' '.join([str(i) for i in range(self.nbScene)])
@@ -257,12 +160,11 @@ class BunAdjParam:
         args+=['-o', prefOut]
         args+=[## Key points
                 '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--min-matches', '10', # min key point pairs
                 '--ip-per-tile', '1000', # key point number
                 '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
                 '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
                 '--individually-normalize', # normalisation param per image not global 
-                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line
+                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line in camera unit
                 '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
                 '--enable-tri-ip-filter', # filter out key point based on triangulation
                 #'--min-triangulation-angle', '0.2', # filtering min angle [°]: KP fails if bad RPC
@@ -288,7 +190,6 @@ class BunAdjParam:
         lstTsai.sort()
         args+= lstTsai
         args+=[## Key points
-                '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 '--heights-from-dem', self.pathDem, # fix key point height from DSM
@@ -321,7 +222,6 @@ class BunAdjParam:
         args+= lstTsai
         args.append(prefOut+'*.gcp')
         args+=[## Key points
-                '--min-matches', '10', # min key point pairs
                 '--force-reuse-match-files', # use former key points
                 '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
                 '--heights-from-dem', self.pathDem, # fix key point height from DSM
@@ -346,6 +246,53 @@ class BunAdjParam:
 
         return args
 
+def SingleBandImg(pathIn, pathOut):
+    '''
+    Convert all images in the folder to a single band image using the HLS
+    colour scpace transformaton.
+    openCV tool : cvtColor(src, bwsrc, cv::COLOR_RGB2HLS)
+    or 
+    matrices average (instead of opencv max-min mean)
+
+    include max StdDev band (for all images) selection with gdal
+    include multiproc
+    '''
+    cmd='gdal_translate -b 2 -q %s %s'% (pathIn, pathOut)
+    out=os.system(cmd)
+    return out
+
+def StereoDescriptor(pathObj, lstPairs):
+    
+    # Availability
+    grepImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format('*'))
+    lstImgAvai=[os.path.basename(pathCur) for pathCur in glob(grepImg)]
+    lstImgAvai.sort()
+    
+    extTsaiStr=pathObj.nTsai[1].replace('{}','')
+    grepTsai=os.path.join(pathObj.pProcData, pathObj.nTsai[1].format('*'))
+    lstTsaiAvai=[os.path.basename(pathCur).replace(extTsaiStr,'.tif') for pathCur in glob(grepTsai)]
+    lstTsaiAvai.sort()
+    
+    # Production Check
+    if not len(lstImgAvai)==len(lstTsaiAvai): SubLogger('CRITICAL', 'Not same number of image (%i) and camera (%i) files in %s'% (len(lstImgAvai), len(lstTsaiAvai), pathObj.pProcData))
+    if not lstImgAvai==lstTsaiAvai: SubLogger('CRITICAL', 'Not identical image and camera files in %s'% pathObj.pProcData)
+
+    lstOut=[]
+    nbComb=len(lstPairs)
+    #for i in range(-1,-nbComb-1,-1): # In case of multiimages key points
+    for i in range(nbComb):
+        comb=lstPairs[i]
+        if not comb['properties']['nbScene']==2: continue
+        lstSceneCur=[pathObj.extFeat1B.format(scenId) for scenId in comb['properties']['scenes'].split(';')]
+        if False in [sceneName in lstImgAvai for sceneName in lstSceneCur]: continue
+        
+        lstScenePath=[os.path.join(pathObj.pProcData,sceneName) for sceneName in lstSceneCur]
+        lstOut.append(' '.join(lstScenePath)+'\n')
+    
+    if not lstOut: SubLogger('CRITICAL', 'stereo list is empty, no scene is available')
+    with open(pathObj.pStereoLst, 'w') as fileOut:
+                    fileOut.writelines(lstOut)
+    return 0
 
 def CopyPrevBA(prefIn, prefOut, gcp=False):
     '''
@@ -360,7 +307,7 @@ def CopyPrevBA(prefIn, prefOut, gcp=False):
     
     dirOut=os.path.dirname(prefOut)
     if os.path.exists(dirOut): 
-        SubLogger(logging.WARNING, '%s folder already exists (skipped)'% os.path.basename(prefOut))
+        SubLogger('WARNING', '%s folder already exists (skipped)'% os.path.basename(prefOut))
         return 0
     os.mkdir(dirOut)
 
@@ -396,12 +343,49 @@ def ExportCam(prefIn, prefOut):
         cmd='cp %s %s'% (pathCur, pathOut)
         os.system(cmd)
 
+def KpCsv2Geojson(prefIn):
+    '''
+    Convert CSV files with key points from ASP to geojson files.
+
+    prefIn (str): bundle adjustment prefix
+    out:
+        0
+    '''
+    for nameCur in ('-initial_residuals_no_loss_function_pointmap_point_log.csv', '-final_residuals_no_loss_function_pointmap_point_log.csv'):  
+        pathIn=prefIn+nameCur
+        if not os.path.exists(pathIn): SubLogger('ERROR', '%s file not found'% nameCur)
+        pathOut=pathIn.replace('csv','geojson')
+        if os.path.exists(pathOut): continue
+
+        jsonOut=tempGeojson.copy()
+        jsonOut['name']=os.path.basename(pathIn).split('_')[0]
+
+        with open(pathIn) as fileIn:
+            for i,lineCur in enumerate(fileIn):
+                if lineCur.startswith('#'): continue
+                wordsCur=lineCur.strip().split(', ')
+
+                dicOut={"type": "Feature", "id": i}
+                dicOut["properties"]={'id': i,
+                                      'Long': float(wordsCur[0]),
+                                      'Lat': float(wordsCur[1]),
+                                      'Height': float(wordsCur[2]),
+                                      'Res': float(wordsCur[3]),
+                                      'NbObs': int(wordsCur[4].replace(' # GCP', '')),
+                                      'GCP': wordsCur[-1].endswith('GCP'),
+                                      }
+                dicOut["geometry"]= {"type": "Point", "coordinates":[float(wordsCur[0]), float(wordsCur[1]), float(wordsCur[2])]}
+                jsonOut['Features'].append(dicOut)
+
+        with open(pathOut, 'w') as fileOut:
+            fileOut.write(json.dumps(jsonOut, indent=2))
     
+    return 0
 
 
 
 
-#SubLogger(logging.ERROR, 'Filter key points creation')
+
 #=======================================================================
 #main
 #-----------------------------------------------------------------------

@@ -13,7 +13,8 @@ from shapely.geometry import Polygon
 
 from pprint import pprint
 
-from PVL.PVL_Logger import SetupLogger, SubLogger
+from OutLib.LoggerFunc import *
+from VarCur import *
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -22,6 +23,7 @@ __author__='Valentin Schmitt'
 __version__=1.0
 __all__ =[]
 SetupLogger(name=__name__)
+#SubLogger(logging.WARNING, 'jojo')
 
 WGS84=(6378137,1/298.25722)
 #-----------------------------------------------------------------------
@@ -199,7 +201,7 @@ def MvsAddImg(descrip, lstDescrip):
     
     return lstIdNew
 
-SubLogger(logging.WARNING, 'jojo')
+
 
 #=======================================================================
 #main
