@@ -53,7 +53,8 @@ if __name__ == "__main__":
 
 
         # Optional arguments
-        parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
+        parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
+        parser.add_argument('-fullBA',action='store_true', help=' Compute a full BA (KP,EO,IO) in one shot (default: False)')
 
         args = parser.parse_args()
         
@@ -95,16 +96,23 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             #logger.info('# Camera creation')
             procBar=ProcessStdout(name='Scene and camera creation',inputCur=nbFeat)
+            lstCtlCam=[]
             for j in range(nbFeat):
                 procBar.ViewBar(j)
                 
+                # Create camera
                 subArgs=ASfMFunc.SubArgs_Camgen(objPath, objBlocks.lstBFeat[iB][j])
                 asp.cam_gen(subArgs)
                 
+                # Add distortion
                 subArgs=ASfMFunc.SubArgs_ConvertCam(objPath, objBlocks.lstBFeat[iB][j])
                 asp.convert_pinhole_model(subArgs)
-                
+
+                # Controle coords
+                lstCtlCam.append(ASfMFunc.CtlCam(objPath, objBlocks.lstBFeat[iB][j]))
+                   
             print()
+            ASfMFunc.CtlCamStat(lstCtlCam)
             
             #---------------------------------------------------------------
             # Orbit visualisation
@@ -130,10 +138,20 @@ if __name__ == "__main__":
             
             subArgs=ASfMFunc.SubArgs_BunAdj(objPath, glob(regexProcImg))
             
+            # OR full BA
+            if args.fullBA:
+                if os.path.exists(os.path.dirname(objPath.prefFull)): raise RuntimeError("Full BA folder already exists")
+                logger.info('# Full adjustment')
+                asp.parallel_bundle_adjust(subArgs.Full(objPath.pProcData, objPath.prefFull))
+                #ASfMFunc.ExportCam(objPath.prefIO, objPath.pProcData)
+                ASfMFunc.KpCsv2Geojson(objPath.prefFull)
+                raise RuntimeError("Full BA finished")
+
             #---------------------------------------------------------------
             # Key point extraction
             #---------------------------------------------------------------
             folderKP=os.path.dirname(objPath.prefKP)
+            input(folderKP)
             if not os.path.exists(folderKP):
                 logger.info('# Key point extraction')
                 asp.parallel_bundle_adjust(subArgs.KeyPoints(objPath.pProcData, objPath.prefKP))
@@ -157,7 +175,7 @@ if __name__ == "__main__":
                 asp.parallel_bundle_adjust(subArgs.IO(objPath.prefEO, objPath.prefIO))
                 ASfMFunc.KpCsv2Geojson(objPath.prefIO)
             
-            #ASfMlib_ba.ExportCam(pathDict['baIO'], pathDict['pProcData'])
+            #ASfMFunc.ExportCam(objPath.prefIO, objPath.pProcData)
               
     #---------------------------------------------------------------
     # Exception management

@@ -5,6 +5,7 @@ import os, sys
 import json
 import logging
 from glob import glob
+import numpy as np
 from pprint import pprint
 from importlib.util import find_spec
 moduleSpec=find_spec('planet_opencv3')
@@ -15,13 +16,14 @@ else:
 
 from OutLib.LoggerFunc import *
 from VarCur import *
+from BlockProc.GeomFunc import ObjTsai
 
 #-----------------------------------------------------------------------
 # Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['SubArgs_Camgen', 'SubArgs_ConvertCam', 'SubArgs_BunAdj', 'SingleBandImg',  'StereoDescriptor']
+__all__ =['SubArgs_Camgen', 'SubArgs_ConvertCam', 'SubArgs_BunAdj', 'SingleBandImg', 'CtlCam',  'StereoDescriptor']
 SetupLogger(name=__name__)
 #SubLogger('ERROR', 'jojo')
 #-----------------------------------------------------------------------
@@ -246,6 +248,31 @@ class SubArgs_BunAdj:
 
         return args
 
+    def Full(self, prefIn, prefOut):
+        args=self.argsInit.copy()
+        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
+        args+= [prefIn+nameCur for nameCur in self.lstTsaiName]
+        args+=['-o', prefOut]
+        args+=[## Key points
+                '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
+                '--ip-per-tile', '1000', # key point number
+                '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
+                '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
+                '--individually-normalize', # normalisation param per image not global 
+                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line in camera unit
+                '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
+                '--enable-tri-ip-filter', # filter out key point based on triangulation
+                '--heights-from-dem', self.pathDem, # fix key point height from DSM
+                '--heights-from-dem-weight', '1', # weight of key point height from DSM
+                ## Model
+                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
+                #'--solve-intrinsics', # include IO in BA (default=False) 
+                ## Least square
+                '--num-passes', '20', # max number of master iterations (after outlier filtering)
+                ]
+        return args
+
+
 def SingleBandImg(pathIn, pathOut):
     '''
     Convert all images in the folder to a single band image using the HLS
@@ -260,6 +287,46 @@ def SingleBandImg(pathIn, pathOut):
     cmd='gdal_translate -b 2 -q %s %s'% (pathIn, pathOut)
     out=os.system(cmd)
     return out
+
+def CtlCam(pathObj, featCur):
+    '''
+    Compare centre coordinates to extended MD
+    '''
+    idImg=featCur['id']
+    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
+    pathTsai=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
+    if not os.path.exists(pathTsai): SubLogger('ERROR', 'Camera not found %s'% pathTsai)
+
+    camPt=ObjTsai(pathTsai)['matC'].flatten()
+
+    pathSelect=os.path.join(pathObj.pB, fileSelec.format(os.path.basename(pathObj.pB)))
+    if not os.path.exists(pathSelect): SubLogger('ERROR', 'Select file not found %s'% pathSelect)
+    with open(pathSelect) as fileIn:
+        jsonIn=json.load(fileIn)
+    
+    key=('Features'*('Features' in jsonIn) or 'features'*('features' in jsonIn))
+    featProp=[feat for feat in jsonIn[key] if feat['id']==idImg][0]['properties']
+    mdPt=np.array([featProp['ecefX_m'], featProp['ecefY_m'], featProp['ecefZ_m']])
+    
+    return camPt-mdPt
+
+def CtlCamStat(lstIn):
+    '''
+    Summarize CtlCam results
+    '''
+    mat=np.array(lstIn)
+    SubLogger('INFO', 'Camera position Statistics')
+    print('ECEF [m]:\tX\tY\tZ\t3D')
+    ave=np.round(np.average(mat, axis=0), 1)
+    print('Average :', ave, np.round(np.sqrt(np.sum(np.square(ave))), 1))
+    rms=np.round(np.sqrt(np.average(np.square(mat), axis=0)), 1)
+    print('RMS     :', rms, np.round(np.sqrt(np.sum(np.square(rms))), 1))
+    std=np.round(np.std(mat, axis=0), 1)
+    print('Std Dev :', std, np.round(np.sqrt(np.sum(np.square(std))), 1))
+    maxCur=np.round(np.amax(mat, axis=0), 1)
+    print('Maximum :', maxCur, np.round(np.sqrt(np.sum(np.square(maxCur))), 1))
+    minCur=np.round(np.amin(mat, axis=0), 1)
+    print('Minimum :', minCur, np.round(np.sqrt(np.sum(np.square(minCur))), 1))
 
 def StereoDescriptor(pathObj, lstPairs):
     
@@ -351,13 +418,15 @@ def KpCsv2Geojson(prefIn):
     out:
         0
     '''
+    from copy import deepcopy
+
     for nameCur in ('-initial_residuals_no_loss_function_pointmap_point_log.csv', '-final_residuals_no_loss_function_pointmap_point_log.csv'):  
         pathIn=prefIn+nameCur
         if not os.path.exists(pathIn): SubLogger('ERROR', '%s file not found'% nameCur)
         pathOut=pathIn.replace('csv','geojson')
         if os.path.exists(pathOut): continue
 
-        jsonOut=tempGeojson.copy()
+        jsonOut=deepcopy(tempGeojson)
         jsonOut['name']=os.path.basename(pathIn).split('_')[0]
 
         with open(pathIn) as fileIn:
@@ -381,9 +450,6 @@ def KpCsv2Geojson(prefIn):
             fileOut.write(json.dumps(jsonOut, indent=2))
     
     return 0
-
-
-
 
 
 #=======================================================================

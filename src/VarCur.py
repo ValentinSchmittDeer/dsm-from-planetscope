@@ -152,6 +152,7 @@ class PathCur:
       self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
       self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
       self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
+      self.prefFull=os.path.join(pathDir, bId, 'ASP_Full','FULL')
 
       self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4]) # matching with ASfMlib_ba.SingleBandImg process
       self.nTsai=('{}_Dist0No.tsai', 
