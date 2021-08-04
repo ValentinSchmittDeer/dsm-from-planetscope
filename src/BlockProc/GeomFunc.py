@@ -34,6 +34,7 @@ def ObjTsai(pathIn):
             dic[words[0]]=[float(part) for part in words[1].split()]
 
     # Extract P matrix
+    dic['matPP']=np.array(dic['cu']+dic['cv'])
     dic['matR']=np.array(dic['R']).reshape(3,3)
     dic['matC']=np.array(dic['C']).reshape(3,1)
     matRinv=inv(dic['matR'])

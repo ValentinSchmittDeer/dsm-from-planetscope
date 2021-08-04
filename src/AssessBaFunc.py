@@ -8,6 +8,7 @@ import numpy as np
 
 # dsm_from_planetscope libraries
 from OutLib.LoggerFunc import *
+from VarCur import *
 from BlockProc import GeomFunc
 
 #-------------------------------------------------------------------
@@ -28,43 +29,32 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-addiPrefix='KPIEO-All'
 
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
 
-def ObjTsai(pathIn):
-    dic={}
-    with open(pathIn) as fileIn:
-        for line in fileIn:
-            if not '=' in  line: continue
 
-            words=[part.strip() for part in line.strip().split('=')]
-            dic[words[0]]=[float(part) for part in words[1].split()]
-    return dic
-
-def Table_Line(lstWords, iLen=5, wordLen=20):
-    strOut= lstWords[0].ljust(iLen)+' | '
-    strOut+=' | '.join([word.ljust(wordLen) for word in lstWords[1:]])
+def Table_Line(iCur, kind, lstVal, iLen=5, wordLen=20):
+    strOut= str(iCur).ljust(iLen)+' | '
+    strOut+=kind.ljust(wordLen)+' | '
+    strOut+=' | '.join([str(word).ljust(wordLen) for word in lstVal])
     print(strOut)
 
-def Table_3DCentre(obj1, obj2):
-    pt1=np.array(obj1['C'])
-    pt2=np.array(obj2['C'])
-    diff=sum(np.power(pt1-pt2, 2))**0.5
-    return str(round(diff, 3))
-def Table_Direction(obj1, obj2):
-    pt1=np.array(obj1['C'])
-    pt2=np.array(obj2['C'])
-    diff=(pt1-pt2)>0
-    lstStr=[]
-    for i in diff:
-        if i:
-            lstStr.append('+')
-        else:
-            lstStr.append('-')
-    return ','.join(lstStr)
+def Table_Sum(matIn, iLen=5, wordLen=20):
+    Table_Line('-'*iLen, '-'*wordLen, ['-'*wordLen]*(matIn.shape[1]))
+    ave=np.round(np.average(matIn, axis=0), 3)
+    Table_Line('Mean', 'Diff '+kind, ave)
+    rms=np.round(np.sqrt(np.average(np.square(matIn), axis=0)), 3)
+    Table_Line('RMS', 'Diff '+kind, rms)
+    std=np.round(np.std(matIn, axis=0), 3)
+    Table_Line('Std', 'Diff '+kind, std)
+    maxCur=np.round(np.amax(matIn, axis=0), 3)
+    Table_Line('Max', 'Diff '+kind, maxCur)
+    minCur=np.round(np.amin(matIn, axis=0), 3)
+    Table_Line('Min', 'Diff '+kind, minCur)
+
+
 def Table_Angles(obj1, obj2):
     from scipy.spatial.transform import Rotation as R
     pt1=np.array(obj1['R']).reshape(3,3)
@@ -74,13 +64,6 @@ def Table_Angles(obj1, obj2):
     diff=rot1.as_euler('zxy', degrees=True)-rot2.as_euler('zxy', degrees=True)
     lstStr=tuple(np.round(diff,3).astype(str))
     return ','.join(lstStr)
-def Table_2DPP(obj1, obj2):
-    pt1=np.array(obj1['cu']+obj1['cv'])
-    pt2=np.array(obj2['cu']+obj2['cv'])
-    diff=sum(np.power(pt1-pt2, 2))**0.5
-    return str(round(diff, 2))
-def Table_Focal(obj1, obj2):
-    return str(round(obj1['fu'][0]-obj2['fu'][0], 3))
 
 def set_axes_equal(ax):
     '''Make axes of 3D plot have equal scale so that spheres appear as spheres,
@@ -142,12 +125,18 @@ if __name__ == "__main__":
         
         if args.init.endswith('/') or True in [pathCur.endswith('/')for pathCur in args.ba]: raise RuntimeError("Please remove the last / from folder path")
         
+        objTemp=PathCur('', '', '', checkRoutine=False)
+        prefix=''.join([os.path.basename(getattr(objTemp,key)) for key in objTemp.__dict__ if key.startswith('pref')])
+        prefix+='-'
+
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
+        print()
+
         #---------------------------------------------------------------
-        # Read initial
+        # Read initial step
         #---------------------------------------------------------------
-        logger.info('# Read initial')
+        logger.info('# Read initial step')
         dicTsai={}
 
         grepTsai=os.path.join(args.init,'*.tsai')
@@ -172,8 +161,8 @@ if __name__ == "__main__":
             lstBaName.append(os.path.basename(pathBA))
             grepTsai=os.path.join(pathBA,'*.tsai')
             for pathCur in glob(grepTsai):
-                name=os.path.basename(pathCur).strip(addiPrefix)
-                dicTsai[name].append(ObjTsai(pathCur))
+                name=os.path.basename(pathCur).strip(prefix)
+                dicTsai[name].append(GeomFunc.ObjTsai(pathCur))
 
             
             # Read residuals
@@ -189,7 +178,7 @@ if __name__ == "__main__":
                         if not lineClean.startswith('/'): continue
                         
                         words=lineClean.split(', ')
-                        name=os.path.basename(words[0]).strip(addiPrefix)
+                        name=os.path.basename(words[0]).strip(prefix)
                         
                         if not checkCamPart:
                             dicTsai[name][-1]['resiKP-%s'% step]=float(words[1])
@@ -198,64 +187,78 @@ if __name__ == "__main__":
                             dicTsai[name][-1]['resiTrans-%s'% step]=float(words[1])
                             dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
 
+        if len(dicTsai)==1: logger.warning('Only one scene in the assessment')
 
         #---------------------------------------------------------------
-        # Summary table
+        # Tables
         #---------------------------------------------------------------
         if args.table or args.longTable:
+            #---------------------------------------------------------------
             # Difference table
-            logger.info('# Summary table (Differences)')
-            Table_Line(['ImgID','Key', 'Init']+lstBaName)
-            for kind in ('3DCentre', 'Direction', 'Angles', 'Focal', '2DPP'):
-                print(kind+':')
-                i=-1
-                for key in dicTsai:
-                    if len(dicTsai[key])==1: continue
-                    
-                    i+=1
-                    lstCur=dicTsai[key]
+            #---------------------------------------------------------------
+            logger.info('# Differences table')
+            Table_Line('ImgID','Key', ['Init']+lstBaName)
+            for kind in ('3DCentre', 'Angles', 'Focal', '2DPP'):
+                print('\n'+kind+':')
+
+                mat=np.zeros([len(dicTsai), 1+len(args.ba)])
+                for i, sceneId in enumerate(dicTsai):                    
+                    lstCur=dicTsai[sceneId]
                     
                     if kind=='3DCentre':
-                        lstOut=[Table_3DCentre(obj, lstCur[0]) for obj in lstCur]
-                    elif kind=='Direction':
-                        if not args.longTable: continue
-                        lstOut=[Table_Direction(obj, lstCur[0]) for obj in lstCur]
+                        mat[i,:]=[np.round(
+                                    np.sqrt(
+                                        np.sum(
+                                            np.square(obj['matC']-lstCur[0]['matC'])
+                                            )
+                                        ),
+                                    3) 
+                                        for obj in lstCur]
                     elif kind=='Angles':
-                        if not args.longTable: continue
-                        lstOut=[Table_Angles(obj, lstCur[0]) for obj in lstCur]
+                        pass
                     elif kind=='Focal':
-                        lstOut=[Table_Focal(obj, lstCur[0]) for obj in lstCur]
+                        mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 3) 
+                                        for obj in lstCur]
                     elif kind=='2DPP':
-                        lstOut=[Table_2DPP(obj, lstCur[0]) for obj in lstCur]
+                        mat[i,:]=[np.round(
+                                    np.sqrt(
+                                        np.sum(
+                                            np.square(obj['matPP']-lstCur[0]['matPP'])
+                                            )
+                                        ),
+                                    1)
+                                        for obj in lstCur]
 
 
 
-                    Table_Line([str(i),'Diff '+kind]+lstOut)
-            
+
+                    if args.longTable: Table_Line(i, 'Diff '+kind, list(mat[i,:]))
+                
+                Table_Sum(mat)
+
+            #---------------------------------------------------------------
             # Residual table
-            logger.info('# Summary table (Residuals)')
-            Table_Line(['ImgID','Key', 'Init']+lstBaName)
+            #---------------------------------------------------------------
+            logger.info('# Residuals table')
+            Table_Line('ImgID', 'Key', ['Init']+lstBaName)
             
-            for kind in ('Tranlation', 'Rotation', 'KeyPoint'):
-                print(kind+':')
-                if not args.longTable: continue
-                i=-1
-                for key in dicTsai:
-                    if len(dicTsai[key])==1: continue
-                    
-                    i+=1
-                    lstCur=dicTsai[key]
+            for kind in ('Tranlation', 'Rotation', 'KeyPoints'):
+                print('\n'+kind+':')
+
+                mat=np.zeros([len(dicTsai), 1+len(args.ba)])
+                for i, sceneId in enumerate(dicTsai):
+                    lstCur=dicTsai[sceneId]
                     
                     if kind=='Tranlation':
-                        lstOut=['{0[resiTrans-final]:.3f}'.format(obj) for obj in lstCur[1:]]
+                        mat[i,:]=[0]+[round(obj['resiTrans-final'], 3) for obj in lstCur[1:]]
                     elif kind=='Rotation':
-                        lstOut=['{0[resiRot-final]:.3f}'.format(obj) for obj in lstCur[1:]]
-                    elif kind=='KeyPoint':
-                        
-                        lstOut=['{0[resiKP-initial]:.3f} => {0[resiKP-final]:.3f} ({0[numKP-final]:.0f})'.format(obj) for obj in lstCur[1:]]
+                        mat[i,:]=[0]+[round(obj['resiRot-final'], 3) for obj in lstCur[1:]]
+                    elif kind=='KeyPoints':
+                        mat[i,:]=[0]+[round(obj['resiKP-final'], 1) for obj in lstCur[1:]]
                     
-                    Table_Line([str(i),'Resid '+kind, '/']+lstOut)
-
+                    if args.longTable: Table_Line(i,'Resid '+kind, list(mat[i,:]))
+                
+                Table_Sum(mat)
         
         #---------------------------------------------------------------
         # Graph

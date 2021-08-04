@@ -123,7 +123,7 @@ class PathCur:
             baEO: EO folder
             baIO: IO folder
     '''
-    def __init__(self, pathDir, bId, pathDem):
+    def __init__(self, pathDir, bId, pathDem, checkRoutine=True):
       import os
       from glob import glob
       from OutLib.LoggerFunc import SetupLogger, SubLogger
@@ -136,16 +136,16 @@ class PathCur:
 
       lstFolder=glob(os.path.join(self.pB, nameBucket.format('*','???')))
       
-      if not len(lstFolder)==1: SubLogger('CRITICAL', 'Local data folder not (or several exist)')
-      self.pData=lstFolder[0]
+      if checkRoutine and not len(lstFolder)==1: SubLogger('CRITICAL', 'Local data folder not (or several exist)')
+      self.pData=lstFolder[0] if len(lstFolder)==1 else 'Fake_L1A'
 
       self.pProcData='{}_ProcData'.format(self.pData)
-      if not os.path.exists(self.pProcData): os.mkdir(self.pProcData)
+      if checkRoutine and not os.path.exists(self.pProcData): os.mkdir(self.pProcData)
 
       #'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
 
       self.l=self.pData.split('_')[-1]
-      if not self.l in dicLevel.keys(): SubLogger('CRITICAL', 'Level unknown')
+      if checkRoutine and not self.l in dicLevel.keys(): SubLogger('CRITICAL', 'Level unknown')
 
       self.extFeat=dicLevel[self.l][1]
 
