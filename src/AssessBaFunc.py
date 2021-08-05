@@ -5,6 +5,8 @@ import os, sys, argparse, time
 from pprint import pprint
 from glob import glob
 import numpy as np
+from numpy.linalg import norm
+from math import acos, pi
 
 # dsm_from_planetscope libraries
 from OutLib.LoggerFunc import *
@@ -54,16 +56,6 @@ def Table_Sum(matIn, iLen=5, wordLen=20):
     minCur=np.round(np.amin(matIn, axis=0), 3)
     Table_Line('Min', 'Diff '+kind, minCur)
 
-
-def Table_Angles(obj1, obj2):
-    from scipy.spatial.transform import Rotation as R
-    pt1=np.array(obj1['R']).reshape(3,3)
-    pt2=np.array(obj2['R']).reshape(3,3)
-    rot1=R.from_matrix(pt1)
-    rot2=R.from_matrix(pt2)
-    diff=rot1.as_euler('zxy', degrees=True)-rot2.as_euler('zxy', degrees=True)
-    lstStr=tuple(np.round(diff,3).astype(str))
-    return ','.join(lstStr)
 
 def set_axes_equal(ax):
     '''Make axes of 3D plot have equal scale so that spheres appear as spheres,
@@ -198,35 +190,24 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             logger.info('# Differences table')
             Table_Line('ImgID','Key', ['Init']+lstBaName)
-            for kind in ('3DCentre', 'Angles', 'Focal', '2DPP'):
+            for kind in ('3DCentre[m]', 'Angles[°]', 'Focal[mm]', '2DPP[mm]'):
                 print('\n'+kind+':')
 
                 mat=np.zeros([len(dicTsai), 1+len(args.ba)])
                 for i, sceneId in enumerate(dicTsai):                    
                     lstCur=dicTsai[sceneId]
                     
-                    if kind=='3DCentre':
-                        mat[i,:]=[np.round(
-                                    np.sqrt(
-                                        np.sum(
-                                            np.square(obj['matC']-lstCur[0]['matC'])
-                                            )
-                                        ),
-                                    3) 
+                    if kind=='3DCentre[m]':
+                        mat[i,:]=[np.round(norm(obj['matC']-lstCur[0]['matC']), 3) 
                                         for obj in lstCur]
-                    elif kind=='Angles':
-                        pass
-                    elif kind=='Focal':
-                        mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 3) 
+                    elif kind=='Angles[°]':
+                        lstVect=[obj['matR']@np.array([[0],[0],[1]]) for obj in lstCur]
+                        mat[i,:]=[round(acos(round(np.vdot(vect,lstVect[0]), 15))*180/pi, 4) for vect in lstVect]
+                    elif kind=='Focal[mm]':
+                        mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 2) 
                                         for obj in lstCur]
-                    elif kind=='2DPP':
-                        mat[i,:]=[np.round(
-                                    np.sqrt(
-                                        np.sum(
-                                            np.square(obj['matPP']-lstCur[0]['matPP'])
-                                            )
-                                        ),
-                                    1)
+                    elif kind=='2DPP[mm]':
+                        mat[i,:]=[np.round(norm(obj['matPP']-lstCur[0]['matPP']), 2)
                                         for obj in lstCur]
 
 
@@ -235,25 +216,25 @@ if __name__ == "__main__":
                     if args.longTable: Table_Line(i, 'Diff '+kind, list(mat[i,:]))
                 
                 Table_Sum(mat)
-
+            
             #---------------------------------------------------------------
             # Residual table
             #---------------------------------------------------------------
             logger.info('# Residuals table')
             Table_Line('ImgID', 'Key', ['Init']+lstBaName)
             
-            for kind in ('Tranlation', 'Rotation', 'KeyPoints'):
+            for kind in ('Tranlation[m]', 'Rotation[°]', 'KeyPoints[pxl]'):
                 print('\n'+kind+':')
 
                 mat=np.zeros([len(dicTsai), 1+len(args.ba)])
                 for i, sceneId in enumerate(dicTsai):
                     lstCur=dicTsai[sceneId]
                     
-                    if kind=='Tranlation':
+                    if kind=='Tranlation[m]':
                         mat[i,:]=[0]+[round(obj['resiTrans-final'], 3) for obj in lstCur[1:]]
-                    elif kind=='Rotation':
+                    elif kind=='Rotation[°]':
                         mat[i,:]=[0]+[round(obj['resiRot-final'], 3) for obj in lstCur[1:]]
-                    elif kind=='KeyPoints':
+                    elif kind=='KeyPoints[pxl]':
                         mat[i,:]=[0]+[round(obj['resiKP-final'], 1) for obj in lstCur[1:]]
                     
                     if args.longTable: Table_Line(i,'Resid '+kind, list(mat[i,:]))
@@ -298,8 +279,7 @@ if __name__ == "__main__":
                     # Camera centre BA
                     graph.plot(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],'o', color=lstColours[j],label=labelStr)
                     # Camera orientation BA 
-                    matR=np.array(lstCur[j]['R']).reshape(3,3)
-                    vectR=matR@vect
+                    vectR=lstCur[j]['matR']@vect
                     if args.ori: graph.quiver(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],
                                               vectR[0], vectR[1], vectR[2],
                                               length=50,color='k')
@@ -309,8 +289,7 @@ if __name__ == "__main__":
                 graph.text(matPts[0,0]+args.s, matPts[0,1]+args.s, matPts[0,2]+args.s,str(i))
 
                 # Camera orientation Init
-                matR=np.array(lstCur[0]['R']).reshape(3,3)
-                vectR=matR@vect
+                vectR=lstCur[0]['matR']@vect
                 if args.ori: graph.quiver(matSclPts[0,0], matSclPts[0,1], matSclPts[0,2],
                                           vectR[0], vectR[1], vectR[2],
                                           length=50, color='r')
