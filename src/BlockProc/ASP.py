@@ -79,6 +79,14 @@ class AspPython():
             fileOut.writelines(out)
         return 0
     
+    def _RunCmd_debug(self, fun, subArgs, pathLog):
+        if self._ValidArgs(subArgs): return 1
+        strCmd='{} {} '.format(self.aspCmd, fun)
+        strCmd+=' '.join(subArgs)
+        SubLogger('INFO', strCmd)
+        #sys.exit()
+        os.system(strCmd)
+        
     def _RunCmd(self, fun, subArgs, pathLog):
         '''
         Run the given function with the argumets. Then, it stores the output in a text file at pathLog
@@ -128,7 +136,7 @@ class AspPython():
         if not subArgs: return 1
         #pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
         pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def parallel_bundle_adjust(self, subArgs):
         fun='parallel_bundle_adjust'

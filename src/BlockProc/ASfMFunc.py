@@ -23,7 +23,13 @@ from BlockProc.GeomFunc import ObjTsai
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['SubArgs_Camgen', 'SubArgs_ConvertCam', 'SubArgs_BunAdj', 'SingleBandImg', 'CtlCam',  'StereoDescriptor']
+__all__ =['SubArgs_Camgen',
+          'SubArgs_DistoCam',
+          'SubArgs_ExportCam', 
+          'SubArgs_BunAdj', 
+          'SingleBandImg', 
+          'CtlCam',  
+          'StereoDescriptor']
 SetupLogger(name=__name__)
 #SubLogger('ERROR', 'jojo')
 #-----------------------------------------------------------------------
@@ -31,7 +37,7 @@ SetupLogger(name=__name__)
 #-----------------------------------------------------------------------
 def SubArgs_Camgen(pathObj, featCur):
     '''
-    Create a dictionary of cam_gen parameters
+    Create a list of cam_gen parameters
 
     pathObj (obj): PathCur clas from VarCur
     featCur (json): current feature desciptor
@@ -40,6 +46,9 @@ def SubArgs_Camgen(pathObj, featCur):
     '''
     # Initial file
     idImg=featCur['id']
+    satId=idImg.split('_')[-1]
+    constSat=sum([ord(l) for l in satId])*factConstSat
+
     pathImgInit=os.path.join(pathObj.pData, pathObj.extFeat.format(idImg))
     if not os.path.exists(pathImgInit): SubLogger('ERROR', 'Initial image file not found, %s'% pathImgInit)
 
@@ -60,7 +69,7 @@ def SubArgs_Camgen(pathObj, featCur):
             '--refine-camera',
             '--reference-dem', pathObj.pDem,
             '--optical-center', camCentre,
-            '--focal-length', camFocal,
+            '--focal-length', str(camFocal), # str(camFocal+constSat),
             '--pixel-pitch', camPitch,
             '-o', pathTsai,
             #'--gcp-file', pathGcp,
@@ -72,11 +81,11 @@ def SubArgs_Camgen(pathObj, featCur):
     
     return subArgs
 
-def SubArgs_ConvertCam(pathObj, featCur):
+def SubArgs_DistoCam(pathObj, featCur):
     '''
-    Create a dictionary of convert_pinhole_model parameters
+    Create a list of convert_pinhole_model parameters
 
-    pathDic (dict): BlockPathDict result
+    pathObj (obj): PathCur clas from VarCur
     featCur (json): current feature desciptor
     out:
         subArgs (list): argument list
@@ -96,25 +105,63 @@ def SubArgs_ConvertCam(pathObj, featCur):
     # Arguments
     subArgs=[ pathImg1B,
             pathTsai0,
-            '--output-type', camDist, # distortion model
+            '--output-type', camDistBa, # distortion model
             # <TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
             '--rpc-degree', '2', # RPC degree
-            '--sample-spacing', '100', # number of pixel for distortion modeling 
+            '--sample-spacing', '1000', # number of pixel for distortion modeling 
             '-o', pathTsai1,
+            ]
+    
+    return subArgs
+
+def SubArgs_ExportCam(prefIn, pathObj, featCur):
+    '''
+    Create a list of convert_pinhole_model parameters
+
+    prefIn (str): last BA prefix
+    pathObj (obj): PathCur clas from VarCur
+    featCur (json): current feature desciptor
+    out:
+        subArgs (list): argument list
+    '''
+    # Initial files
+    prefix=''.join([os.path.basename(getattr(pathObj,key)) for key in pathObj.__dict__ if key.startswith('pref')])
+    prefix+='-'
+
+    idImg=featCur['id']
+    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
+    if not os.path.exists(pathImg1B): SubLogger('ERROR', 'Initial image file not found, %s'% pathImg1B)
+
+    lstTsai1=glob('{}*{}*{}'.format(prefIn,idImg,'.tsai'))
+    if not len(lstTsai1)==1: SubLogger('ERROR', 'Initial tsai file not found (or several), %s'% idImg)
+    pathTsai1=lstTsai1[0]
+
+    # New files
+    nameTsai2=pathObj.nTsai[2].format(pathObj.extFeat1B.format(idImg).split('.')[0])
+    pathTsai2=os.path.join(pathObj.pProcData, nameTsai2)
+    if os.path.exists(pathTsai2): return 0
+    
+    # Arguments
+    subArgs=[ pathImg1B,
+            pathTsai1,
+            '--output-type', camDistExp, # distortion model
+            # <TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
+            '--sample-spacing', '100', # number of pixel for distortion modeling 
+            '-o', pathTsai2,
             ]
     
     return subArgs
 
 class SubArgs_BunAdj:
     '''
-    Documentation at the end of the script
+    Full documentation at the end of the script
     '''
     argsInit=[  ## Basics
                 '-t', 'nadirpinhole', # set stereo session pinhole OR nadirpinhole
                 '--datum', 'WGS_1984', # set datum
                 '--nodata-value', '0', # nodata, do not process <= x
                 #'--input-adjustments-prefix', path # initial camera transform
-                # : read adjust files with that prefix
+                # : read "adjust" files with that prefix
                 # Caution cannot be coupled with --inline-adj (so no distortion)
                 
                 ## Key points
@@ -126,9 +173,10 @@ class SubArgs_BunAdj:
                 ## Intrinsic imporvement
                 
                 ## Least square
+                '--num-passes', '5', # iteration number
                 
                 ## Storage
-                #'--report-level', '20',
+                '--report-level', '20',
                 '--save-cnet-as-csv', # Save key points in gcp point format
                 '--inline-adjustments', # Store result in .tsai, not in adjsut
                 ]
@@ -136,16 +184,16 @@ class SubArgs_BunAdj:
     def __init__(self, pathObj, lstImg):
         self.pathDem=pathObj.pDem
         
+        # Stereo
+        self.argsInit+=['--overlap-list', pathObj.pStereoLst,] # stereopair file for key point extraction
+            #OR
+        #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
+        
         # Scenes
         if not type(lstImg)==list or False in [type(pathCur)==str for pathCur in lstImg]: SubLogger('CRITICAL', 'Image list (lstImg) must be a list of path')
         self.nbScene=len(lstImg)
         lstImg.sort()
         self.argsInit+=lstImg
-        
-        # Stereo
-        self.argsInit+=['--overlap-list', pathObj.pStereoLst,] # stereopair file for key point extraction
-            #OR
-        #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
         
         # Cameras
         self.lstTsaiName=[pathObj.nTsai[1].format(
@@ -166,82 +214,98 @@ class SubArgs_BunAdj:
                 '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
                 '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
                 '--individually-normalize', # normalisation param per image not global 
-                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line in camera unit
+                '--epipolar-threshold', '5', # key point matching, Max distance to the epipolar line in camera unit
                 '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
                 '--enable-tri-ip-filter', # filter out key point based on triangulation
                 #'--min-triangulation-angle', '0.2', # filtering min angle [°]: KP fails if bad RPC
                 #'--forced-triangulation-distance', '450e3', # force distance to the camera if not trian fails: useless
                 #'--stop-after-matching', # stop after matching key point: do not provide initial residuals
-                #'--heights-from-dem', 'pathDEM', # fix key point height from DSM
-                #'--heights-from-dem-weight', '10', # weight of key point height from DSM
                 ## Model
                 '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
-                #'--robust-threshold', '0.9', # threshold of cost function, focus on large error
                 #'--fix-gcp-xyz', # turn GCP to fixed: useless whether fixed-camera-indices in
-                #'--max-disp-error', '100', # ??
+                #'--max-disp-error', '10', # ??
+                '--remove-outliers-params', '"90.0 1.0 0.3 1.0" ' # outlier filtering param
+                '--remove-outliers-by-disparity-params', '70.0 2.0 ' # outlier filtering param
+                '--elevation-limit', '0.0 4000.0 ' # outlier filtering param
                 ## Least square
-                '--num-passes', '2', # iteration number: need one at least to filter out key points
+                '--max-iterations', '100', # in non-linear least square (per pass)
                 '--parameter-tolerance', '1e-6', # least square limite 
                 ]
         
         return args
 
+    def Free(self, prefIn, prefOut):
+        args=self.argsInit.copy()
+        lstTsai= glob(prefIn+'*.tsai')
+        if not len(lstTsai)==self.nbScene: SubLogger('CRITICAL', 'Different number of images (%i) and camera (%i)'% (self.nbScene,len(lstTsai)))
+        lstTsai.sort()
+        args+= lstTsai
+        args+=['-o', prefOut]
+        args+=[## Key points
+                '--force-reuse-match-files', # use former match file: using -o prefix
+                '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
+                ## Model
+                '--camera-weight', '10', # EO weight (x>1 -> stiffer)
+                '--robust-threshold', '1', # set cost function threshold
+                '--remove-outliers-params', '"90.0 1.0 0.3 1.0" ' # outlier filtering param
+                #'--remove-outliers-by-disparity-params', '70.0 2.0 ' # outlier filtering param
+                #'--elevation-limit', '700.0 2300.0' # outlier filtering param
+                ## Least square
+                '--max-iterations', '100', # in non-linear least square (per pass) 
+                ]
+        return args
+
     def EO(self, prefIn, prefOut):
         args=self.argsInit.copy()
         lstTsai=glob(prefIn+'*.tsai')
+        if not len(lstTsai)==self.nbScene: SubLogger('CRITICAL', 'Different number of images (%i) and camera (%i)'% (self.nbScene,len(lstTsai)))
         lstTsai.sort()
         args+= lstTsai
         args+=[## Key points
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 '--heights-from-dem', self.pathDem, # fix key point height from DSM
-                '--heights-from-dem-weight', '1', # weight of key point height from DSM
+                '--heights-from-dem-weight', '1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 ## Model
-                #'--rotation-weight', '0', '--translation-weight', '0', # EO weight (x>0 -> stiffer)
+                #'--rotation-weight', '0', 
+                #'--translation-weight', '0.01', # EO weight (x>0 -> stiffer)
                 # OR
-                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
-                #'--fixed-camera-indices', "'0 1'", # fixed camera i
-                #'--fix-gcp-xyz', # turn GCP to fixed
+                '--camera-weight', '0.9', # EO weight (x>1 -> stiffer)
                 ## Least square
-                #'--robust-threshold', '10', # set cost function threshold
-                #'--max-disp-error', '100', # ??
-                '--num-passes', '20', # max number of master iterations (after outlier filtering)
-                #'--max-iterations', '100', # in non-linear least square (per pass)  
-                #'--remove-outliers-params', "‘75.0 3.0 2.0 3.0’" # outlier filtering param
-                # OR
-                #'--remove-outliers-by-disparity-params', '70' # outlier filtering param
-                # OR
-                #'--elevation-limit', 'min', 'max' # outlier filtering param
+                #'--robust-threshold', '1000', # set cost function threshold
+                #'--max-disp-error', '1', # with ref DSM
+                ## Least square
+                #'--max-iterations', '50', # in non-linear least square (per pass)  
+                #'--parameter-tolerance', '1e-4', # least square limite 
                 ]
         args+=['-o', prefOut]
-        
+        args[args.index('--num-passes')+1]='1'
+
         return args
 
     def IO(self, prefIn, prefOut):
         args=self.argsInit.copy()
         lstTsai= glob(prefIn+'*.tsai')
+        if not len(lstTsai)==self.nbScene: SubLogger('CRITICAL', 'Different number of images (%i) and camera (%i)'% (self.nbScene,len(lstTsai)))
         lstTsai.sort()
         args+= lstTsai
-        args.append(prefOut+'*.gcp')
         args+=[## Key points
-                '--force-reuse-match-files', # use former key points
+                '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
                 '--heights-from-dem', self.pathDem, # fix key point height from DSM
                 '--heights-from-dem-weight', '1', # weight of key point height from DSM
                 ## Model
                 #'--rotation-weight', '0', '--translation-weight', '0', # EO weight (x>0 -> stiffer)
                 # OR
-                #'--camera-weight', '1', # EO weight (x>1 -> stiffer)
-                #'--fixed-camera-indices', "'%s'"% ' '.join(lstInd), # fixed camera i
+                '--camera-weight', '2', # EO weight (x>1 -> stiffer)
                 ## Intrinsic imporvement
                 '--solve-intrinsics', # include IO in BA (default=False) 
-                #'--intrinsics-to-float', "'focal_length'", # list of IO param to solve
-                #'--intrinsics-to-share', "' '", # list of common IO param
+                '--intrinsics-to-float', "'focal_length' "# "'focal_length optical_center other_intrinsics' ", # list of IO param to solve
+                #'--intrinsics-to-share', "'focal_length' "# "'focal_length optical_center other_intrinsics' ", # list of common IO param
                 #'--reference-terrain', pathDict['pDem'], # intrinsic imporvement
                 #'--reference-terrain-weight' # weight of the DEM in IO resolution (x>1 -> more impact)
                 ## Least square
-                '--num-passes', '20', # iteration number
-                '--parameter-tolerance', '1e-2', # least square limite 
+                #'--parameter-tolerance', '1e-2', # least square limite 
                 ]
         args+=['-o', prefOut]
         args.remove('--save-cnet-as-csv')
@@ -259,7 +323,7 @@ class SubArgs_BunAdj:
                 '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
                 '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
                 '--individually-normalize', # normalisation param per image not global 
-                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line in camera unit
+                '--epipolar-threshold', '5', # key point matching, Max distance to the epipolar line in camera unit
                 '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
                 '--enable-tri-ip-filter', # filter out key point based on triangulation
                 '--heights-from-dem', self.pathDem, # fix key point height from DSM
@@ -267,9 +331,35 @@ class SubArgs_BunAdj:
                 ## Model
                 '--camera-weight', '1', # EO weight (x>1 -> stiffer)
                 #'--solve-intrinsics', # include IO in BA (default=False) 
+                #'--max-disp-error', '1', # with ref DSM
+                '--remove-outliers-params', '"90.0 1.0 0.3 1" ' # outlier filtering param
+                #'--remove-outliers-by-disparity-params', '70.0 2.0 ' # outlier filtering param
+                #'--elevation-limit', '0.0 4000.0 ' # outlier filtering param
                 ## Least square
-                '--num-passes', '20', # max number of master iterations (after outlier filtering)
+                '--max-iterations', '100', # in non-linear least square (per pass) 
+                #'--parameter-tolerance', '1e-1', # least square limite
                 ]
+        return args
+
+    def Fixed(self, prefIn, prefOut):
+        strInd=' '.join([str(i) for i in range(self.nbScene)])
+
+        args=self.argsInit.copy()
+        lstTsai= glob(prefIn+'*.tsai')
+        lstTsai.sort()
+        args+= lstTsai
+        args+=['-o', prefOut]
+        args+=[## Key points
+                '--force-reuse-match-files', # use former match file: using -o prefix
+                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
+                ## Model
+                '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
+                ## Least square
+                '--max-iterations', '1', # in non-linear least square (per pass)
+                ]
+        args[args.index('--num-passes')+1]='1'
+        #args[args.index('--min-matches')+1]='1'
+        
         return args
 
 
@@ -287,6 +377,42 @@ def SingleBandImg(pathIn, pathOut):
     cmd='gdal_translate -b 2 -q %s %s'% (pathIn, pathOut)
     out=os.system(cmd)
     return out
+
+def Correct_DistoCam(pathObj, featCur):
+    '''
+    Correct camera files by changing 0 to a very small value (distortion only)
+
+    pathObj (obj): PathCur clas from VarCur
+    featCur (json): current feature desciptor
+    out:
+        
+    '''
+    # Initial files
+    idImg=featCur['id']
+    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
+    pathTsai=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
+    if not os.path.exists(pathTsai): SubLogger('ERROR', 'Initial tsai file not found, %s'% pathTsai)
+
+    # Read file
+    with open(pathTsai) as fileIn:
+        txtIn=fileIn.readlines()
+    
+    if not txtIn[12]=='TSAI\n': SubLogger('CRITICAL', 'Function not read for such distortion, please adjust it')
+
+    fileOut=open(pathTsai, 'w')
+    fileOut.writelines(txtIn[:13])
+    for i in range(13,len(txtIn)):
+        lineCur=txtIn[i].split('=')
+        if not len(lineCur)>1: 
+            fileOut.write(txtIn[i])
+            continue
+        
+        if lineCur[-1].strip()=='0': 
+            fileOut.write(txtIn[i].replace('0', '1e-20'))
+        else:
+            fileOut.write(txtIn[i])
+    fileOut.close()
+    
 
 def CtlCam(pathObj, featCur):
     '''
@@ -343,13 +469,14 @@ def StereoDescriptor(pathObj, lstPairs):
     # Production Check
     if not len(lstImgAvai)==len(lstTsaiAvai): SubLogger('CRITICAL', 'Not same number of image (%i) and camera (%i) files in %s'% (len(lstImgAvai), len(lstTsaiAvai), pathObj.pProcData))
     if not lstImgAvai==lstTsaiAvai: SubLogger('CRITICAL', 'Not identical image and camera files in %s'% pathObj.pProcData)
-
+    
     lstOut=[]
     nbComb=len(lstPairs)
-    #for i in range(-1,-nbComb-1,-1): # In case of multiimages key points
+    #for i in range(-1,-nbComb-1,-1): # In case of multiimages key points: automatic in ASP
     for i in range(nbComb):
         comb=lstPairs[i]
         if not comb['properties']['nbScene']==2: continue
+
         lstSceneCur=[pathObj.extFeat1B.format(scenId) for scenId in comb['properties']['scenes'].split(';')]
         if False in [sceneName in lstImgAvai for sceneName in lstSceneCur]: continue
         
@@ -367,9 +494,9 @@ def CopyPrevBA(prefIn, prefOut, gcp=False):
     prefIn (str): path prefix input
     prefOut (str): path prefix output
     out:
-        0: folder creation
+        0: skip
         OR
-        1: skip 
+        1: folder creation 
     '''
     
     dirOut=os.path.dirname(prefOut)
@@ -382,6 +509,11 @@ def CopyPrevBA(prefIn, prefOut, gcp=False):
     for pathCur in glob(prefIn+'*.tif'):
         cmd='cp %s %s'% (pathCur, pathCur.replace(prefIn,prefOut))
         os.system(cmd)
+    
+    # Copy tsai
+    #for pathCur in glob(prefIn+'*.tsai'):
+    #    cmd='cp %s %s'% (pathCur, pathCur.replace(prefIn,prefOut))
+    #    os.system(cmd)
 
     # Copy match
     for pathCur in glob(prefIn+'*-clean.match'):
@@ -397,19 +529,6 @@ def CopyPrevBA(prefIn, prefOut, gcp=False):
         
     return 1
 
-def ExportCam(prefIn, prefOut):
-
-    from ASfM import nameTsai1, nameTsai2
-    extTsai1=nameTsai1.replace('{}', '')
-    extTsai2=nameTsai2.replace('{}', '')
-    if os.path.isdir(prefOut) and not prefOut.endswith('/'): prefOut+='/'
-    
-    for pathCur in glob(prefIn+'*'+extTsai1):
-        nameOut=os.path.basename(pathCur).strip('KPEIO-').replace(extTsai1,extTsai2)
-        pathOut=prefOut+nameOut
-        cmd='cp %s %s'% (pathCur, pathOut)
-        os.system(cmd)
-
 def KpCsv2Geojson(prefIn):
     '''
     Convert CSV files with key points from ASP to geojson files.
@@ -422,7 +541,9 @@ def KpCsv2Geojson(prefIn):
 
     for nameCur in ('-initial_residuals_no_loss_function_pointmap_point_log.csv', '-final_residuals_no_loss_function_pointmap_point_log.csv'):  
         pathIn=prefIn+nameCur
-        if not os.path.exists(pathIn): SubLogger('ERROR', '%s file not found'% nameCur)
+        if not os.path.exists(pathIn): 
+            SubLogger('ERROR', '%s file not found'% nameCur)
+            continue
         pathOut=pathIn.replace('csv','geojson')
         if os.path.exists(pathOut): continue
 
@@ -450,7 +571,6 @@ def KpCsv2Geojson(prefIn):
             fileOut.write(json.dumps(jsonOut, indent=2))
     
     return 0
-
 
 #=======================================================================
 #main

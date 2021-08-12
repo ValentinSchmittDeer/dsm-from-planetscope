@@ -43,7 +43,9 @@ __all__ =[# SSBP
           'camCentre',
           'camFocal',
           'camPitch',
-          'camDist',
+          'camDistBa',
+          'camDistExp',
+          'factConstSat',
           ]
 
 ## SSBP
@@ -153,10 +155,12 @@ class PathCur:
       self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
       self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
       self.prefFull=os.path.join(pathDir, bId, 'ASP_Full','FULL')
+      self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
+      self.prefFree=os.path.join(pathDir, bId, 'ASP_Free','FREE')
 
       self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4]) # matching with ASfMlib_ba.SingleBandImg process
       self.nTsai=('{}_Dist0No.tsai', 
-                  '{}_Dist1Rpc.tsai',
+                  '{}_Dist1Ba.tsai',
                   '{}_Dist2Adj.tsai')
 
     def __str__(self):
@@ -166,8 +170,11 @@ class PathCur:
 # Dove-C, in  pxl: f=127090.909, c=3300 2178, p=1
 # Dove-C, in  mm: f=699, c=18.15 12.1, p=5.5e-3
 camCentre='18.15 12.1'
-camFocal='699'
+camFocal=699
 camPitch='5.5e-3'
-camDist='RPC'
+#<TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
+camDistBa='TsaiLensDistortion'
+camDistExp='BrownConradyDistortion'
+factConstSat=1e-6
 
 ## MSS
