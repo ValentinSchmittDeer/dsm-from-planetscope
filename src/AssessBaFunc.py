@@ -100,6 +100,7 @@ if __name__ == "__main__":
         parser.add_argument('-ba',required=True ,nargs='+' ,help='path to next BA folder in the right order')
         
         #Optional arguments
+        parser.add_argument('-pref', default='',help='Additional prefix')
         parser.add_argument('-graph',action='store_true',help='Return the graph (interactive graph with matplotlib)')
         parser.add_argument('-table',action='store_true',help='Return the table')
         parser.add_argument('-longTable',action='store_true',help='Long table version (make use of scipy 1.7)')
@@ -120,6 +121,7 @@ if __name__ == "__main__":
         objTemp=PathCur('', '', '', checkRoutine=False)
         prefix=''.join([os.path.basename(getattr(objTemp,key)) for key in objTemp.__dict__ if key.startswith('pref')])
         prefix+='-'
+        prefix+=args.pref
 
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
@@ -145,15 +147,17 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Read next steps
         #---------------------------------------------------------------
-        logger.info('# Read next steps')
+        logger.info('Prefix: %s'% prefix)
         lstBaName=[]
 
         for pathBA in args.ba:
+            logger.info('# Read %s'% os.path.basename(pathBA))
             # Read camera
             lstBaName.append(os.path.basename(pathBA))
             grepTsai=os.path.join(pathBA,'*.tsai')
             for pathCur in glob(grepTsai):
                 name=os.path.basename(pathCur).strip(prefix)
+                if not name in dicTsai: raise RuntimeError("Image name not found, add prefix (-pref): %s"% name) 
                 dicTsai[name].append(GeomFunc.ObjTsai(pathCur))
 
             
@@ -180,7 +184,7 @@ if __name__ == "__main__":
                             dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
 
         if len(dicTsai)==1: logger.warning('Only one scene in the assessment')
-
+        
         #---------------------------------------------------------------
         # Tables
         #---------------------------------------------------------------
@@ -196,18 +200,19 @@ if __name__ == "__main__":
                 mat=np.zeros([len(dicTsai), 1+len(args.ba)])
                 for i, sceneId in enumerate(dicTsai):                    
                     lstCur=dicTsai[sceneId]
-                    
+                    if not len(lstCur)==1+len(args.ba): continue
+
                     if kind=='3DCentre[m]':
                         mat[i,:]=[np.round(norm(obj['matC']-lstCur[0]['matC']), 3) 
                                         for obj in lstCur]
                     elif kind=='Angles[°]':
                         lstVect=[obj['matR']@np.array([[0],[0],[1]]) for obj in lstCur]
-                        mat[i,:]=[round(acos(round(np.vdot(vect,lstVect[0]), 15))*180/pi, 4) for vect in lstVect]
+                        mat[i,:]=[round(acos(round(np.vdot(vect,lstVect[0]), 13))*180/pi, 4) for vect in lstVect]
                     elif kind=='Focal[mm]':
-                        mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 2) 
+                        mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 3) 
                                         for obj in lstCur]
                     elif kind=='2DPP[mm]':
-                        mat[i,:]=[np.round(norm(obj['matPP']-lstCur[0]['matPP']), 2)
+                        mat[i,:]=[np.round(norm(obj['matPP']-lstCur[0]['matPP']), 3)
                                         for obj in lstCur]
 
 
