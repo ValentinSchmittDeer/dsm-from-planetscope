@@ -46,6 +46,10 @@ __all__ =[# SSBP
           'camDistBa',
           'camDistExp',
           'factConstSat',
+          'gsdOrth',
+          ## MSS
+          'methodDM',
+
           ]
 
 ## SSBP
@@ -151,6 +155,7 @@ class PathCur:
 
       self.extFeat=dicLevel[self.l][1]
 
+      self.prefStereoKP= os.path.join(pathDir, bId, 'ASP_StereoKeyPoints','SKP')
       self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
       self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
       self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
@@ -158,10 +163,14 @@ class PathCur:
       self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
       self.prefFree=os.path.join(pathDir, bId, 'ASP_Free','FREE')
 
-      self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4]) # matching with ASfMlib_ba.SingleBandImg process
-      self.nTsai=('{}_Dist0No.tsai', 
+      self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
+
+      self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4])
+      self.nTsai=('{}_Dist0Init.tsai', 
                   '{}_Dist1Ba.tsai',
                   '{}_Dist2Adj.tsai')
+      
+      self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
 
     def __str__(self):
       return str(self.__dict__)
@@ -169,7 +178,7 @@ class PathCur:
 ## ASfM
 # Dove-C, in  pxl: f=127090.909, c=3300 2178, p=1
 # Dove-C, in  mm: f=699, c=18.15 12.1, p=5.5e-3
-camCentre='18.15 12.1'
+camCentre=(18.15, 12.1)
 camFocal=699
 camPitch='5.5e-3'
 #<TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
@@ -177,4 +186,7 @@ camDistBa='TsaiLensDistortion'
 camDistExp='BrownConradyDistortion'
 factConstSat=1e-6
 
+gsdOrth=4
+
 ## MSS
+methodDM=('PW', 'MVS')

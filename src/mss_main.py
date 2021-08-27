@@ -6,15 +6,11 @@ from pprint import pprint
 from glob import glob
 
 # PyValLib packages
-from PVL.PVL_Logger import SetupLogger, ProcessStdout
-from PVL.PVL_Rpc import *
+from OutLib.LoggerFunc import *
+from VarCur import *
+from SSBP.blockFunc import SceneBlocks 
+from BlockProc import ASP, MSSFunc, GeomFunc
 
-# dsm_from_planetscope libraries
-from SSBP.SSBPlib_block import SceneBlocks
-from PCT import *
-
-from MSS.MSSlib_asp import AspUtility as AspObj
-from MSS import * 
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
@@ -33,7 +29,16 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-
+featIdTest=('20210112_180848_0f15',
+'20210112_180847_0f15',
+'20210107_180314_1040',
+'20210107_180316_1040',
+'20210105_180642_0f22',
+'20210105_180643_0f22',
+    )
+featIdTest=('20210112_180848_0f15',
+'20210105_180643_0f22',
+    )
 
 #-----------------------------------------------------------------------
 # Hard command
@@ -51,12 +56,12 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         #Positional input
         parser.add_argument('-i', required=True, help='Working directory')
-        parser.add_argument('-m', required=True, help='Dense matching mode PW|MVS')
+        parser.add_argument('-m', required=True, help='Dense matching method PW|MVS')
         parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
         
         #Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
-        parser.add_argument('-debug',action='store_true',help='Debug mode: avoid planet_common check')
+        #parser.add_argument('-debug',action='store_true',help='Debug mode: avoid planet_common check')
 
         args = parser.parse_args()
         
@@ -65,24 +70,22 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
         if not os.path.isfile(args.dem): raise RuntimeError("DEM file not found")
-        if not args.m in ('PW', 'MVS'): raise RuntimeError("Unknown mode")
+        if not args.m in methodDM: raise RuntimeError("Unknown method")
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
 
         #---------------------------------------------------------------
-        # Check planet_common and docker
+        # ASP Python interface
         #---------------------------------------------------------------
-        if not args.debug:
-            logger.info('# Check planet_common and docker ')
-            if not PCTlib_product.CheckPC(): raise RuntimeError("The script must run in planet_common's env")
-            
-            asp=AspObj()
+        #if not args.debug:
+        logger.info('# ASP Python interface')        
+        asp=ASP.AspPython()
         
         #---------------------------------------------------------------
-        # Read Repo
+        # Read Block
         #---------------------------------------------------------------
-        logger.info('# Read Repo')
+        logger.info('# Read Block')
         objBlocks=SceneBlocks([], args.i, 'dir')
         logger.info(objBlocks)
         
@@ -92,26 +95,39 @@ if __name__ == "__main__":
             lstLoop=[i for i in range(objBlocks.nbB) if objBlocks.lstBId[i][0] in args.b]
         
         for iB in lstLoop:
+            #---------------------------------------------------------------
+            # Test Mode
+            #---------------------------------------------------------------
+            logger.warning('# TEST MODE')
+            lstTemp=[objBlocks.lstBFeat[iB][j] for j in range(objBlocks.lstBId[iB][1]) if objBlocks.lstBFeat[iB][j]['id'] in featIdTest]
+            objBlocks.lstBFeat[iB]=lstTemp
+            objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
+            lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
+            objBlocks.lstBCouple[iB]=lstTemp
+            
+            ###################
             bId, nbFeat= objBlocks.lstBId[iB]
             logger.info(bId)
-            pathDict=MSSlib_stereo.BlockPathDict(args.i, bId)
-            
+            objPath=PathCur(args.i, bId, args.dem)
             
             #---------------------------------------------------------------
             # Dense matching pairwise
             #---------------------------------------------------------------
             logger.info('# Dense matching')
 
-            for i,pairCur in enumerate(objBlocks.lstBCouple[iB]):
-                if not i==487: continue
-
+            for j in range(len(objBlocks.lstBCouple[iB])):
+                if not objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2: continue
+                
+                pairCur=objBlocks.lstBCouple[iB][j]
+                
+                # FILTER
+                lstID=pairCur['properties']['scenes'].split(';')
+                
                 #---------------------------------------------------------------
-                # Find Images
+                # Find Images 
                 #---------------------------------------------------------------
-                lstImgId=[pairCur['properties'][key] for key in pairCur['properties'] if key.startswith('scene')]
-                lstOfLst=[glob(os.path.join(pathDict['pProcData'], idCur+'*.tif')) for idCur in lstImgId]
-                lstImgPath=[lst[0] for lst in lstOfLst if lst]
-                if not len(lstImgPath)==2: continue
+                lstImgPath=[os.path.join(objPath.pProcData, objPath.extFeat1B.format(idCur)) for idCur in pairCur['properties']['scenes'].split(';')]
+                if False in [os.path.exists(pathCur) for pathCur in lstImgPath]: continue
                 
                 #---------------------------------------------------------------
                 # More images
@@ -122,25 +138,18 @@ if __name__ == "__main__":
                     lstImgPath+=[lst[0] for lst in lstOfLst if lst]
 
                 #---------------------------------------------------------------
-                # Find the best Tsai
+                # Find camera
                 #---------------------------------------------------------------
-                lstCamPath=[]
-                for pathImg in lstImgPath:
-                    lstCam=glob(pathImg.split('.')[0]+'*.tsai')
-                    if not lstCam: raise RuntimeError('Camera file (tsai) not found: %s'% pathImg)
-                    lstCam.sort()
-                    lstCamPath.append(lstCam[-1],)
-                
-                print(i, ':', len(lstImgPath), '--', len(lstCamPath))
-                pprint(lstImgPath)
-                #continue
-                input('GO?')
+                lstCamPath=[os.path.join(objPath.pProcData, objPath.nTsai[2].format(objPath.extFeat1B.format(idCur).split('.')[0])) for idCur in pairCur['properties']['scenes'].split(';')]
+                if False in [os.path.exists(pathCur) for pathCur in lstCamPath]: continue
+
+                #input('Ready ?')
                 #---------------------------------------------------------------
                 # Preparation
                 #---------------------------------------------------------------
                 '''
                 There are 2 options:
-                    alignment-method epipolar> +: make use of input geometry -: must shrink the mask
+                    alignment-method epipolar> +: make use of input geometry -: must shrink the mask using the epipolar transformation parameters
                     alignment-method affineepipolar> +: automatic relvant mask, better result -: transfo based on new key points
                 '''
                 #subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
@@ -159,46 +168,53 @@ if __name__ == "__main__":
                 #input('mask OK')
                 
                 #---------------------------------------------------------------
+                # Filter process
+                #---------------------------------------------------------------
+                perfOut=os.path.join(os.path.dirname(objPath.prefDM),'ResultDM')
+                lstNameIn=('-DEM.tif', '-PC.las') #('-DEM.tif', '-IntersectionErr.tif', '-GoodPixelMap.tif', '-F.tif')
+                if os.path.exists(perfOut+lstNameIn[0].replace('.', '%i.'% j)): continue
+                #---------------------------------------------------------------
                 # Process
                 #---------------------------------------------------------------
-                subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
-                print(subArgs)
-                asp.stereo(subArgs)
-                #input('stereo OK')
-                if not os.path.exists(pathDict['pDm']+'-PC.tif'): 
-                    cmd='rm -r %s*'% pathDict['pDm']
+                subArgs=MSSFunc.SubArgs_Stereo(lstImgPath, lstCamPath, objPath.prefDM)                
+                out=asp.parallel_stereo(subArgs)
+                
+                if out or not os.path.exists(objPath.prefDM+'-PC.tif'): 
+                    pprint(objBlocks.lstBCouple[iB][j]['properties'])
+                    logger.error("Stereo Failed")
+                    cmd='rm -r %s-*'% objPath.prefDM
                     os.system(cmd)
                     continue
                 
-                subArgs=MSSlib_stereo.P2DParam(pathDict['pDm']+'-PC.tif')
+                subArgs=MSSFunc.SubArgs_P2D(objPath.prefDM+'-PC.tif')
                 asp.point2dem(subArgs)
-                subArgs=MSSlib_stereo.P2LParam(pathDict['pDm']+'-PC.tif')
+                subArgs=MSSFunc.SubArgs_P2L(objPath.prefDM+'-PC.tif')
                 asp.point2las(subArgs)
-                input('dem OK')
                 
                 #---------------------------------------------------------------
                 # Save Process
                 #---------------------------------------------------------------
-                perfOut=os.path.join(os.path.dirname(pathDict['pDm']),'ResDM')
-                for nameIn in ('-DEM.tif', '-IntersectionErr.tif', '-GoodPixelMap.tif', '-F.tif'):
-                    pathIn=pathDict['pDm']+nameIn
+                for nameIn in lstNameIn:
+                    pathIn=objPath.prefDM+nameIn
                     if not os.path.exists(pathIn): 
-                        logger.error('File not found (%s): pair %i'% (nameIn, i))
+                        logger.error('File not found (%s): pair %i'% (nameIn, j))
                     else:
                         cmd='mv {} {}'.format(pathIn, 
-                                                    perfOut+nameIn.replace('.', '-%i.'% i)
+                                                    perfOut+nameIn.replace('.', '%i.'% j)
                                                     )
                         #print(cmd)
                         os.system(cmd)
-
-                input('next OK')
                 
+                #input('Stereo Check')
+
                 #---------------------------------------------------------------
                 # Clean folder
                 #---------------------------------------------------------------
-                cmd='rm -r %s*'% pathDict['pDm']
+                cmd='rm -r %s-*'% objPath.prefDM
                 #print(cmd)
                 os.system(cmd)
+                
+                #input('Next')
             
 
     #---------------------------------------------------------------

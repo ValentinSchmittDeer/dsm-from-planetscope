@@ -133,7 +133,7 @@ def _find_caller():
     frame = sys._getframe(2)
     while frame:
         code = frame.f_code
-        if os.path.join("utils", "logger.") not in code.co_filename:
+        if not 'OutLib' in code.co_filename:
             mod_name = frame.f_globals["__name__"]
             #return mod_name, (code.co_filename, frame.f_lineno, code.co_name)
             return mod_name, (code.co_filename, frame.f_lineno, code.co_name)

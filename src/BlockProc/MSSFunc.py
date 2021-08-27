@@ -25,73 +25,9 @@ __all__ =[]
 SetupLogger(name=__name__)
 #SubLogger(logging.WARNING, 'jojo')
 
-WGS84=(6378137,1/298.25722)
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def BlockPathDict(pathDir, bId):
-    '''
-    Create a dictonary with all needed path related to the block name
-    
-    pathDir (str): path repository with all blocks in
-    dId (str): block ID (name)
-    out:
-        dicOut (dict): dictionary with path as value
-            pB:
-            pDem:
-            pData:
-            pProcData:
-            l: product level
-            lTup: 
-            baKP:
-            baEO:
-            baIO:
-
-
-    '''
-    from ASfM import nameProcData
-    from PCT import nameBucket, dicLevel
-
-    lstFolder=glob(os.path.join(pathDir, bId, nameBucket.format('*','*')))
-    if not lstFolder: 
-        SubLogger(logging.ERROR, 'Data are not found locally')
-        return True
-    lstFolder.sort()
-    pathData=lstFolder[0]
-    pathProcData=nameProcData.format(pathData)
-    if not os.path.exists(pathProcData): os.mkdir(pathProcData)
-
-    level=pathData.split('_')[-1]
-    if not level in dicLevel.keys():
-        SubLogger(logging.ERROR, 'Level unknown')
-        return True
-
-    dicOut= {'pB': os.path.join(pathDir, bId),
-            'pData': pathData,
-            'pProcData': pathProcData,
-            #'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
-            'l': level,
-            'lTup': dicLevel[level],
-            'pDm': os.path.join(pathDir, bId, 'ASP-DenseMatch', 'DM')
-            }
-
-    return dicOut
-
-def Geo2Cart_Elli(ptGeo,elliAF=WGS84):
-    lam, phi, h=ptGeo
-    phi=phi*pi/180
-    lam=lam*pi/180
-    a,f=elliAF
-    
-    e2=2*f-f**2
-    n=a/(1-e2*sin(phi)**2)**0.5
-    
-    x=(n+h)*cos(phi)*cos(lam)
-    y=(n+h)*cos(phi)*sin(lam)
-    z=((1-e2)*n+h)*sin(phi)
-    
-    return np.array([x,y,z]).reshape(3,1)
-
 def OverlapMask(descrip, pathMask, pathCam, pathDem, margin=10):
     '''
     Caution: image unit is assumed to be pixel, check in case of mm camera model
@@ -148,18 +84,38 @@ def OverlapMask(descrip, pathMask, pathCam, pathDem, margin=10):
 
     return tileSize
 
-def StereoParam(lstImg, lstTsai, prefOut):
+def SubArgs_Stereo(lstImg, lstTsai, prefOut):
     # Arguments
-    subArgs=['--skip-rough-homography',
-            '-t', 'nadirpinhole',
-            #'-e', '1', # starting point into the full (Preprocessing), (Disparity), (Blend), (Sub-pixel Refinement), (Outlier Rejection and Hole Filling), (Triangulation)
-            '--alignment-method', 'affineepipolar', # affineepipolar|homography|epipolar|none: makes uses of initial adjustmet
-            '--stereo-algorithm', '1', # 1:SGM (needs parallel_stereo), 2:MGM
-            #'--corr-tile-size',
-            '--individually-normalize',
-            '--ip-detect-method', '1', # stereo_corr coarse correlation: key point algo
-            #'--prefilter-mode',
+    subArgs=['-t', 'nadirpinhole', # mode
+             #'-e', '1', # starting point 1:Preprocessing, 2:Disparity, 3:Blend, 4:Sub-pixel Refinement, 5:Outlier Rejection and Hole Filling, 6:Triangulation
+             ## Preprocessing
+             '--alignment-method', 'epipolar', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
+             #'--individually-normalize', # image radio normalisation
+             #'ip-per-tile', '1000' # key point extraction number per tile (case of alignement method)
+             '--ip-detect-method', '1', # key point algorithm 0:OBAlgG, 1:SIFT, 2:ORB (case of alignement method)
+             #'--no-data', '0',
+             '--force-reuse-match-files', # # use former match file: ?using -o prefix?
+             '--skip-rough-homography', # avoid the datum-based homography 
+             ## Correlation
+             #'--prefilter-mode', '2', # Preprocessing method 
+             #'corr-seed-mode', '1', # correltion method
+             '--min-num-ip', '10', # quit the process based on number of key point. 
+             #'cost-mode', '2', # # correlation cost function method
+             #'--stereo-algorithm', '1', # 1:SGM (needs parallel_stereo), 2:MGM
+             #'--corr-tile-size', '6400 ', # Value of --corr-tile-size is 1024 but image size is Vector2(1337,1295).
+                 #Increase --corr-tile-size so the entire image fits in one tile, or use parallel_stereo. Not that making --corr-tile-size larger than 9000 or so may cause GDAL to crash.
             #'disparity map initialization' #1:box filter-like accumulator; 2:coarse-to-fine pyramid based; 3:disparity search space into sub-regions with similar values of disparity
+             ## Subpixel Refinement
+             #'--subpixel-mode', '1' # subprixel function fitted
+             #'--phase-subpixel-accuracy', '20' # max pixel division denominator (1/x)
+             ## Filtering
+             #'--filter-mode', '1' # filtering mode 
+             ## Triangulation
+             #'--universe-center', 'None' # point cloud filtering based on distance to "universe", None|Camera|Zero
+             #'--bundle-adjust-prefix', str #
+             #'--min-triangulation-angle', '0.0' # angle in ° fullfilled for triangulation
+             #'--point-cloud-rounding-error', '0.0' # point cloud rounding value in m, 1/20**10 = 1mm
+             #'--compute-error-vector', # Save the error vectore rather than just its legnth, Stored in -PC
             ]
     subArgs+=lstImg
     subArgs+=lstTsai
@@ -167,7 +123,7 @@ def StereoParam(lstImg, lstTsai, prefOut):
 
     return subArgs
 
-def P2DParam(pathPCIn):
+def SubArgs_P2D(pathPCIn):
     # Arguments
     subArgs=['--transverse-mercator',
             '--nodata-value', '-32767',
@@ -177,12 +133,12 @@ def P2DParam(pathPCIn):
             ]
     return subArgs
 
-def P2LParam(pathPCIn):
+def SubArgs_P2L(pathPCIn):
     # Arguments
     subArgs=['--datum', 'WGS84', 
             '--t_srs', 'EPSG:32611', 
             pathPCIn,
-            '-o', pathPCIn.replace('.tif','.las')
+            '-o', pathPCIn.replace('.tif','')
             ]
     return subArgs
 

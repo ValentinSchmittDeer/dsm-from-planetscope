@@ -6,6 +6,7 @@ import json
 import logging
 from subprocess import run as Run
 from subprocess import PIPE
+from pprint import pprint
 
 from OutLib.LoggerFunc import *
 from VarCur import *
@@ -41,7 +42,16 @@ class AspPython():
                     imgName=lineCur.strip().split()[0]
             if not imgName: SubLogger('CRITICAL', 'sudo docker pull us.gcr.io/planet-ci-prod/stereo_docker2:latest')  
 
+            # mount data directories
             self.rootFolder='/vagrant'
+
+            # mount stereo.default
+            #pathModule= sys._getframe().f_code.co_filename
+            #pathSteDef=os.path.join(os.path.dirname(pathModule), 'stereo.default')
+            # All arguments can be passed in command lines.
+            # If you still wnat to use stereo.default file, create it next to ASP.py and add -v path/BlockProc/stereo.default:/app/stereo.default
+
+
             self.aspCmd='docker run -it -v {0}:{0} {1}'.format(self.rootFolder, imgName)
 
         # Local system
@@ -60,23 +70,14 @@ class AspPython():
         '''
         if not subArgs: return 1
         lstStrArgs=[type(arg)==str for arg in subArgs]
-        if False in lstStrArgs: SubLogger('CRITICAL', 'All arguments must be string type')
+        if False in lstStrArgs: 
+            pprint(subArgs)
+            SubLogger('CRITICAL', 'All arguments must be string type')
         
         lstAbsPath=[arg.startswith(self.rootFolder) for arg in subArgs if '/' in arg]
-        if False in lstAbsPath: SubLogger('CRITICAL', 'All paths must be absolute')
-        return 0
-
-    def _RunCmd_old(self, fun, subArgs, pathLog):
-        '''
-        Run the given function with the argumets. Then, it stores the output in a text file at pathLog
-        '''
-        if self._ValidArgs(subArgs): return 1
-        strCmd='{} {} '.format(self.aspCmd, fun)
-        strCmd+=' '.join(subArgs)
-        #SubLogger('INFO', strCmd)
-        out=os.popen(strCmd).readlines()
-        with open(pathLog, 'w') as fileOut:
-            fileOut.writelines(out)
+        if False in lstAbsPath: 
+            pprint(subArgs)
+            SubLogger('CRITICAL', 'All paths must be absolute')
         return 0
     
     def _RunCmd_debug(self, fun, subArgs, pathLog):
@@ -85,7 +86,10 @@ class AspPython():
         strCmd+=' '.join(subArgs)
         SubLogger('INFO', strCmd)
         #sys.exit()
-        os.system(strCmd)
+        out=Run(strCmd,
+                shell=True,
+                #check=True,
+                )
         
     def _RunCmd(self, fun, subArgs, pathLog):
         '''
@@ -94,11 +98,10 @@ class AspPython():
         if self._ValidArgs(subArgs): return 1
         strCmd='{} {} '.format(self.aspCmd, fun)
         strCmd+=' '.join(subArgs)
-        #SubLogger('INFO', strCmd)
         out=Run(strCmd,
                 shell=True,
                 check=True,
-                stdout=PIPE, # set as comment, it display the process stdout 
+                stdout=PIPE,
                 )
         if pathLog and out.stdout:
             with open(pathLog, 'w') as fileOut:
@@ -116,13 +119,19 @@ class AspPython():
     def convert_pinhole_model(self, subArgs):
         fun='convert_pinhole_model'
         if not subArgs: return 1
-        pathOut=[arg for arg in subArgs if arg.endswith('tif')][0].replace('.tif', '.'+fun)
+        pathOut=None
+        return self._RunCmd(fun, subArgs, pathOut)
+
+    def mapproject(self, subArgs):
+        fun='mapproject'
+        if not subArgs: return 1
+        pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
     def orbitviz(self, subArgs):
         fun='orbitviz'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0].replace('.kml', '.'+fun)
+        pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
     def ipfind(self, subArgs):
@@ -134,14 +143,12 @@ class AspPython():
     def bundle_adjust(self, subArgs):
         fun='bundle_adjust'
         if not subArgs: return 1
-        #pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
         pathOut=None
         return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def parallel_bundle_adjust(self, subArgs):
         fun='parallel_bundle_adjust'
         if not subArgs: return 1
-        #pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
         pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
@@ -153,31 +160,31 @@ class AspPython():
     def stereo_pprc(self, subArgs):
         fun='stereo_pprc'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
-        return self._RunCmd(fun, subArgs, pathOut)
+        pathOut=None
+        return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def stereo(self, subArgs):
         fun='stereo'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
-        return self._RunCmd(fun, subArgs, pathOut)
+        pathOut=None
+        return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def parallel_stereo(self, subArgs):
         fun='parallel_stereo'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
-        return self._RunCmd(fun, subArgs, pathOut)
+        pathOut=None
+        return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def point2dem(self, subArgs):
         fun='point2dem'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
+        pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
     def point2las(self, subArgs):
         fun='point2las'
         if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
+        pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
 

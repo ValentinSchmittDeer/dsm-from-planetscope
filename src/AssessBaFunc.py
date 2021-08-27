@@ -106,7 +106,7 @@ if __name__ == "__main__":
         parser.add_argument('-longTable',action='store_true',help='Long table version (make use of scipy 1.7)')
         parser.add_argument('-s', type=int, default=100, help='Graph: scale factor')
         parser.add_argument('-ori',action='store_true',help='Graph: orienation arrow')
-        parser.add_argument('-e', action='store_false', help='Graph: do not display the Earth')
+        parser.add_argument('-e', action='store_true', help='Graph: display the Earth')
 
         args = parser.parse_args()
         

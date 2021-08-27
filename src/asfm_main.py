@@ -10,8 +10,7 @@ from pprint import pprint
 from OutLib.LoggerFunc import *
 from VarCur import *
 from SSBP.blockFunc import SceneBlocks 
-#from PCT import *
-from BlockProc import *
+from BlockProc import ASP, ASfMFunc
 
 #-------------------------------------------------------------------
 # Usage
@@ -31,12 +30,21 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-featIdTest=['20210328_151810_1020_1A_Analytic_DN.tif','20210328_151811_1020_1A_Analytic_DN.tif']
-
+featIdTest=('20210112_180848_0f15',
+'20210112_180847_0f15',
+'20210107_180314_1040',
+'20210107_180316_1040',
+'20210105_180642_0f22',
+'20210105_180643_0f22',
+    )
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-
+def FixControl(prefIn):
+    logger.error('_______FIX CONTROL_______')
+    ASfMFunc.CopyPrevBA(prefIn, objPath.prefFix)
+    asp.bundle_adjust(subArgs.Fix(prefIn, objPath.prefFix))
+    ASfMFunc.KpCsv2Geojson(objPath.prefFix)
 
 #=======================================================================
 #main
@@ -54,9 +62,10 @@ if __name__ == "__main__":
 
 
         # Optional arguments
-        parser.add_argument('-p', default=8, help='Process last step- 0: ReadBlock, 1: CamCreat, 2: CtrlCam, 3: OrbitVis, 4: BA-KP, 5: BA-Free, 6:BA-EO, 7: BA-IO, 8:Export (default: 8)')
+        parser.add_argument('-p', type=int, default=8, help='Process last step- 0: ReadBlock, 1: CamCreat, 2: CtrlCam, 3: OrbitVis, 4: BA-KP, 5: BA-Free, 6:BA-EO, 7: BA-IO, 8:Export (default: 8)')
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
-        parser.add_argument('-fullBA',action='store_true', help=' Compute a full BA (KP,EO,IO) in one shot (default: False)')
+        parser.add_argument('-ortho',action='store_true', help='Compute orthophoto from initial and final parameters (default: False)')
+        parser.add_argument('-epsg', default='32611', help='Current ESPG used by initial ortho (default: 32611)')
 
         args = parser.parse_args()
         
@@ -78,7 +87,7 @@ if __name__ == "__main__":
         asp=ASP.AspPython()
         
         #---------------------------------------------------------------
-        # Read Repo
+        # Read Block
         #---------------------------------------------------------------
         logger.info('# Read Block')
         objBlocks=SceneBlocks([], args.i, 'dir')
@@ -91,8 +100,19 @@ if __name__ == "__main__":
         
         if args.p==0: raise RuntimeError("Process end")
         for iB in lstLoop:
+            #---------------------------------------------------------------
+            # Test Mode
+            #---------------------------------------------------------------
+            logger.warning('# TEST MODE')
+            lstTemp=[objBlocks.lstBFeat[iB][j] for j in range(objBlocks.lstBId[iB][1]) if objBlocks.lstBFeat[iB][j]['id'] in featIdTest]
+            objBlocks.lstBFeat[iB]=lstTemp
+            objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
+            lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
+            objBlocks.lstBCouple[iB]=lstTemp
+            
+            ###################
             bId, nbFeat= objBlocks.lstBId[iB]
-            logger.info(bId)
+            logger.info('%s (%i scenes)'% objBlocks.lstBId[iB])
             objPath=PathCur(args.i, bId, args.dem)
 
             #---------------------------------------------------------------
@@ -116,17 +136,21 @@ if __name__ == "__main__":
 
                 # Controle coords
                 lstCtlCam.append(ASfMFunc.CtlCam(objPath, objBlocks.lstBFeat[iB][j]))
+
+                # Ortho Init
+                if args.ortho:
+                    asp.mapproject(ASfMFunc.SubArgs_Ortho('Init', objPath, objBlocks.lstBFeat[iB][j], objPath.pProcData, args.epsg))
                    
             print()
-            if args.p==1: raise RuntimeError("Process end")
+            if args.p==1: continue
 
             ASfMFunc.CtlCamStat(lstCtlCam)
-            if args.p==2: raise RuntimeError("Process end")
+            if args.p==2: continue
             #---------------------------------------------------------------
             # Orbit visualisation
             #---------------------------------------------------------------
             logger.info('# Orbit visualisation')
-            regexProcImg= os.path.join(objPath.pProcData, '*.tif')
+            regexProcImg= os.path.join(objPath.pProcData, objPath.extFeat1B.format('*'))
             regexProcCam= os.path.join(objPath.pProcData, objPath.nTsai[1].format('*'))
             pathOut= objPath.pOrbit
             
@@ -136,49 +160,69 @@ if __name__ == "__main__":
                         '-o', pathOut,
                         )
                 asp.orbitviz(subArgs)
-            if args.p==3: raise RuntimeError("Process end")
+            if args.p==3: continue
             
             #---------------------------------------------------------------
             # Bundle adjustment series
             #---------------------------------------------------------------
-            pathPairTxt=ASfMFunc.StereoDescriptor(objPath, objBlocks.lstBCouple[iB])
+            ASfMFunc.StereoDescriptor(objPath, objBlocks.lstBCouple[iB])
             
-            subArgs=ASfMFunc.SubArgs_BunAdj(objPath, glob(regexProcImg))
+            lstImgId=[feat['id'] for feat in objBlocks.lstBFeat[iB]]
+            subArgs=ASfMFunc.SubArgs_BunAdj(objPath, lstImgId)
 
             #---------------------------------------------------------------
             # Key point extraction
             #---------------------------------------------------------------
             folderKP=os.path.dirname(objPath.prefKP)
+            
             if not os.path.exists(folderKP):
                 logger.info('# Key point extraction')
-                asp.parallel_bundle_adjust(subArgs.KeyPoints(objPath.pProcData, objPath.prefKP))
+                
+                # Stereo feature extraction
+                for j in range(len(objBlocks.lstBCouple[iB])):
+                    print('Pair %i'% objBlocks.lstBCouple[iB][j]['id'], end=';')
+                    if not objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2: continue
+                    asp.stereo(ASfMFunc.SubArgs_StereoKP(objPath, objBlocks.lstBCouple[iB][j]))
+                    ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP, kp='disp')
+                print()
+
+                # Fixed bundle adjustment
+                asp.bundle_adjust(subArgs.Fix(objPath.pProcData, objPath.prefKP))
                 ASfMFunc.KpCsv2Geojson(objPath.prefKP)
             else:
                 logger.warning('%s folder already exists (skipped)'% os.path.basename(folderKP))
-            if args.p==4: raise RuntimeError("Process end")
+            if args.p==4: continue
 
             #---------------------------------------------------------------
             # Free adjustment
             #---------------------------------------------------------------
-            if ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefFree):
+            if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefFree, kp='clean'):
                 logger.info('# Free adjustment')
-                asp.parallel_bundle_adjust(subArgs.Free(objPath.prefKP, objPath.prefFree))
+                asp.bundle_adjust(subArgs.Free(objPath.prefKP, objPath.prefFree))
                 ASfMFunc.KpCsv2Geojson(objPath.prefFree)
-            if args.p==5: raise RuntimeError("Process end")
-
+                
+            if args.ortho:
+                [asp.mapproject(ASfMFunc.SubArgs_Ortho('Free', objPath, objBlocks.lstBFeat[iB][j], objPath.prefFree, args.epsg)) for j in range(nbFeat)]
+            if args.p==5: continue
+            
             #---------------------------------------------------------------
             # EO adjustment
             #---------------------------------------------------------------
-            if ASfMFunc.CopyPrevBA(objPath.prefFree, objPath.prefEO):
+            if not ASfMFunc.CopyPrevBA(objPath.prefFree, objPath.prefEO, kp='none'):
                 logger.info('# EO adjustment')
-                asp.parallel_bundle_adjust(subArgs.EO(objPath.prefFree, objPath.prefEO))
+                ASfMFunc.KpCsv2Gcp(os.path.join(objPath.pB,'EO-cnet.csv'), 
+                                    objPath.prefEO, 
+                                    accuXY=10, 
+                                    accuZ=30, 
+                                    accuI=3)
+                asp.bundle_adjust(subArgs.EO(objPath.prefFree, objPath.prefEO))
                 ASfMFunc.KpCsv2Geojson(objPath.prefEO)
-            if args.p==6: raise RuntimeError("Process end")
+            if args.p==6: continue
 
             #---------------------------------------------------------------
             # IO adjustment
             #---------------------------------------------------------------
-            if ASfMFunc.CopyPrevBA(objPath.prefFree, objPath.prefIO):
+            if False  and not ASfMFunc.CopyPrevBA(objPath.prefFree, objPath.prefIO):
                 logger.info('# IO adjustment')
                 asp.parallel_bundle_adjust(subArgs.IO(objPath.prefEO, objPath.prefIO))
                 ASfMFunc.KpCsv2Geojson(objPath.prefIO)
@@ -187,18 +231,22 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             # Export cam
             #---------------------------------------------------------------
+            logger.info('# Camera export')
             procBar=ProcessStdout(name='Camera export',inputCur=nbFeat)
             lstCtlCam=[]
             for j in range(nbFeat):
                 procBar.ViewBar(j)
-                subArgs=ASfMFunc.SubArgs_ExportCam(objPath.prefIO, objPath, objBlocks.lstBFeat[iB][j])
+                ### Normally IO
+                subArgs=ASfMFunc.SubArgs_ExportCam(objPath.prefKP, objPath, objBlocks.lstBFeat[iB][j])
                 asp.convert_pinhole_model(subArgs)
                 
             print()
-            if args.p==8: raise RuntimeError("Process end")
+            if args.p==8: continue
               
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------
     except RuntimeError as msg:
         logger.critical(msg)
+
+
