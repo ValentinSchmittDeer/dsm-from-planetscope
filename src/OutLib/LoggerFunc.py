@@ -106,6 +106,11 @@ def SubLogger(lvl, msg, *, name=None):
     
     msg= caller_key[-1] + ': ' + msg
     
+    if not lvl.isupper(): 
+        print('Traceback (most recent call last):\n\tIn %s'% caller_module)
+        print('LevelError: SubLogger message level must be capital case')
+        sys.exit()
+        
     if lvl=='INFO':
         level=logging.INFO
         endAfter=False

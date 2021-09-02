@@ -37,6 +37,17 @@ featIdTest=('20210112_180848_0f15',
 '20210105_180642_0f22',
 '20210105_180643_0f22',
     )
+# In track
+#featIdTest=('20210107_180314_1040','20210107_180316_1040',)
+# Cross date
+#featIdTest=('20210107_180314_1040','20210105_180642_0f22',)
+# Cross track
+#featIdTest=('20210112_180848_0f15','20210107_180314_1040',)
+#featIdTest=('20210112_180848_0f15',)
+'''
+-t rpc
+point2dem --errorimage
+'''
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
@@ -59,10 +70,18 @@ if __name__ == "__main__":
         parser.add_argument('-i', required=True, help='Working directory')
         parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
 
-
+        # Process level
+        #   read: ReadBlock
+        #   cam: CamCreat
+        #   ctrl: CtrlCam
+        #   orb: OrbitVis
+        #   kp: BA-KP
+        #   eo:BA-EO
+        #   io: BA-IO,
+        #   exp:Export
+        parser.add_argument('-p', default='exp', help='Process last step- read: ReadBlock, cam: CamCreat, ctrl: CtrlCam, orb: OrbitVis, kp: BA-KP, eo:BA-EO, io: BA-IO, exp:Export (default: exp)')
 
         # Optional arguments
-        parser.add_argument('-p', type=int, default=8, help='Process last step- 0: ReadBlock, 1: CamCreat, 2: CtrlCam, 3: OrbitVis, 4: BA-KP, 5: BA-Free, 6:BA-EO, 7: BA-IO, 8:Export (default: 8)')
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
         parser.add_argument('-ortho',action='store_true', help='Compute orthophoto from initial and final parameters (default: False)')
         parser.add_argument('-epsg', default='32611', help='Current ESPG used by initial ortho (default: 32611)')
@@ -74,7 +93,10 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
         if not os.path.isfile(args.dem): raise RuntimeError("DEM file not found")
-        if not -1<args.p<9: raise RuntimeError("Last process step must in range [0, 8]")
+        
+        lstProcLvl=('read', 'cam', 'ctrl', 'orb', 'kp', 'eo', 'io', 'exp')
+        if not args.p in lstProcLvl: raise RuntimeError("Last process step unknown")
+        args.p=lstProcLvl.index(args.p)
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
@@ -180,43 +202,66 @@ if __name__ == "__main__":
                 
                 # Stereo feature extraction
                 for j in range(len(objBlocks.lstBCouple[iB])):
-                    print('Pair %i'% objBlocks.lstBCouple[iB][j]['id'], end=';')
                     if not objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2: continue
-                    asp.stereo(ASfMFunc.SubArgs_StereoKP(objPath, objBlocks.lstBCouple[iB][j]))
-                    ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP, kp='disp')
-                print()
+                    
+                    print('Pair%i'% objBlocks.lstBCouple[iB][j]['id'], end=', ')
+                    softLvl=0
+                    asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, objBlocks.lstBCouple[iB][j], softness=softLvl))
+                    
+                    while ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP, kp='disp'):
+                        raise RuntimeError("ERROR SKP")
+                        softLvl+=1
+                        asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, objBlocks.lstBCouple[iB][j], softness=softLvl))
 
-                # Fixed bundle adjustment
-                asp.bundle_adjust(subArgs.Fix(objPath.pProcData, objPath.prefKP))
+                    ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP_std, kp='match')
+                
+                print()
+                
+                # Fixed bundle adjustment: Merge obs and ste SRTM height
+                asp.bundle_adjust(subArgs.Init(objPath.pProcData, objPath.prefKP))
                 ASfMFunc.KpCsv2Geojson(objPath.prefKP)
+                ###### stsKP
+                asp.bundle_adjust(subArgs.Init(objPath.pProcData, objPath.prefKP_std))
+                ASfMFunc.KpCsv2Geojson(objPath.prefKP_std)
+                
             else:
                 logger.warning('%s folder already exists (skipped)'% os.path.basename(folderKP))
+            
             if args.p==4: continue
 
             #---------------------------------------------------------------
-            # Free adjustment
-            #---------------------------------------------------------------
-            if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefFree, kp='clean'):
-                logger.info('# Free adjustment')
-                asp.bundle_adjust(subArgs.Free(objPath.prefKP, objPath.prefFree))
-                ASfMFunc.KpCsv2Geojson(objPath.prefFree)
-                
-            if args.ortho:
-                [asp.mapproject(ASfMFunc.SubArgs_Ortho('Free', objPath, objBlocks.lstBFeat[iB][j], objPath.prefFree, args.epsg)) for j in range(nbFeat)]
-            if args.p==5: continue
-            
-            #---------------------------------------------------------------
             # EO adjustment
             #---------------------------------------------------------------
-            if not ASfMFunc.CopyPrevBA(objPath.prefFree, objPath.prefEO, kp='none'):
+            if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefEO, kp='none'):
                 logger.info('# EO adjustment')
-                ASfMFunc.KpCsv2Gcp(os.path.join(objPath.pB,'EO-cnet.csv'), 
+                ASfMFunc.KpCsv2Gcp(objPath.prefKP+'-cnet.csv', 
                                     objPath.prefEO, 
                                     accuXY=10, 
-                                    accuZ=30, 
-                                    accuI=3)
-                asp.bundle_adjust(subArgs.EO(objPath.prefFree, objPath.prefEO))
+                                    accuZ=10, 
+                                    accuI=0.5)
+                
+                asp.bundle_adjust(subArgs.EO(objPath.prefKP, objPath.prefEO))
                 ASfMFunc.KpCsv2Geojson(objPath.prefEO)
+            
+                if args.ortho:
+                    [asp.mapproject(ASfMFunc.SubArgs_Ortho('EO', objPath, objBlocks.lstBFeat[iB][j], objPath.prefEO, args.epsg)) for j in range(nbFeat)]
+
+                ###### stsKP
+                ASfMFunc.CopyPrevBA(objPath.prefKP_std, objPath.prefEO_std, kp='none')
+                ASfMFunc.KpCsv2Gcp(objPath.prefKP_std+'-cnet.csv', 
+                                    objPath.prefEO_std, 
+                                    accuXY=10, 
+                                    accuZ=10, 
+                                    accuI=0.5)
+                asp.bundle_adjust(subArgs.EO(objPath.prefKP_std, objPath.prefEO_std))
+                ASfMFunc.KpCsv2Geojson(objPath.prefEO_std)
+            
+                if args.ortho:
+                    [asp.mapproject(ASfMFunc.SubArgs_Ortho('EO_std', objPath, objBlocks.lstBFeat[iB][j], objPath.prefEO_std, args.epsg)) for j in range(nbFeat)]
+
+
+
+
             if args.p==6: continue
 
             #---------------------------------------------------------------

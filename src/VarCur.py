@@ -158,10 +158,12 @@ class PathCur:
       self.prefStereoKP= os.path.join(pathDir, bId, 'ASP_StereoKeyPoints','SKP')
       self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
       self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
+      ### Std KP
+      self.prefKP_std= os.path.join(pathDir, bId, 'ASP_KeyPoints-Std','KP')
+      self.prefEO_std= os.path.join(pathDir, bId, 'ASP_Extrinsic-Std','EO')
+
       self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
-      self.prefFull=os.path.join(pathDir, bId, 'ASP_Full','FULL')
       self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
-      self.prefFree=os.path.join(pathDir, bId, 'ASP_Free','FREE')
 
       self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
 
