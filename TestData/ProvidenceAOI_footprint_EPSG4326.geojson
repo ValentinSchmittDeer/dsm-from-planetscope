@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "ProvidenceAOI_footprint_EPSG4326",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "fid": 4, "id": 2, "NAME": "Providence Mountain", "SOURCE": "LiDAR, CA MountainPass", "ACQ_DATE": "2019\/10\/02 00:00:00", "DENSITY": 6.31, "HEIGHT_ACC": 0.1 }, "geometry": { "type": "MultiPolygon", "coordinates": [ [ [ [ -115.199340477681375, 35.089265952256191 ], [ -115.446703021962932, 35.284124203549453 ], [ -115.189693547183793, 35.500268537933039 ], [ -114.931086838380651, 35.309426178843182 ], [ -115.199340477681375, 35.089265952256191 ] ] ] ] } }
+]
+}

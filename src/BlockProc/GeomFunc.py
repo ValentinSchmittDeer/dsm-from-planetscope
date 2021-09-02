@@ -664,7 +664,7 @@ def Geo2Cart_Elli(ptGeo,elliAF='WGS84'):
     Convert geographic coordinates to cartesian coordinates
         
     ptGeo (array: [[Long (L), Lat (P), H], [...]]): geographic coordinates
-    ptsIn (tuple: (a, f)): Ellipsoid name <'Bessel 1841'|'WGS84'|'PZ-90.11'> 
+    ptsIn (tuple or str): Ellipsoid name <'Bessel 1841'|'WGS84'|'PZ-90.11'> or tuple (a, f)
         [default='WGS84']
     
     out:
@@ -683,7 +683,10 @@ def Geo2Cart_Elli(ptGeo,elliAF='WGS84'):
     radRatio=np.append(np.ones([nbPts,ndCoords-1])*pi/180,np.ones([nbPts,1]),axis=1)
     ptsIn=ptGeo*radRatio
     
-    a,f=dicElli[elliAF]
+    if type(elliAF)==str:
+        a,f=dicElli[elliAF]
+    elif type(elliAF)==tuple:
+        a,f=elliAF
     
     e2=2*f-f**2
     n=a/(1-e2*np.sin(ptsIn[:,1])**2)**0.5
