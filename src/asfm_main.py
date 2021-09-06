@@ -43,7 +43,10 @@ featIdTest=('20210112_180848_0f15',
 #featIdTest=('20210107_180314_1040','20210105_180642_0f22',)
 # Cross track
 #featIdTest=('20210112_180848_0f15','20210107_180314_1040',)
-#featIdTest=('20210112_180848_0f15',)
+# One
+featIdTest=('20210112_180848_0f15',)
+# Tree
+#featIdTest=('20210112_180848_0f15','20210112_180847_0f15','20210105_180642_0f22')
 '''
 -t rpc
 point2dem --errorimage
@@ -96,8 +99,8 @@ if __name__ == "__main__":
         
         lstProcLvl=('read', 'cam', 'ctrl', 'orb', 'kp', 'eo', 'io', 'exp')
         if not args.p in lstProcLvl: raise RuntimeError("Last process step unknown")
-        args.p=lstProcLvl.index(args.p)
-        
+        iProc=lstProcLvl.index(args.p)
+
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
         print()
@@ -120,7 +123,6 @@ if __name__ == "__main__":
         else:
             lstLoop=[i for i in range(objBlocks.nbB) if objBlocks.lstBId[i][0] in args.b]
         
-        if args.p==0: raise RuntimeError("Process end")
         for iB in lstLoop:
             #---------------------------------------------------------------
             # Test Mode
@@ -137,6 +139,8 @@ if __name__ == "__main__":
             logger.info('%s (%i scenes)'% objBlocks.lstBId[iB])
             objPath=PathCur(args.i, bId, args.dem)
 
+            if iProc <= lstProcLvl.index('read'): continue
+
             #---------------------------------------------------------------
             # Camera creation
             #---------------------------------------------------------------
@@ -146,10 +150,10 @@ if __name__ == "__main__":
             for j in range(nbFeat):
                 procBar.ViewBar(j)
                 
-                # Create camera
-                subArgs=ASfMFunc.SubArgs_Camgen(objPath, objBlocks.lstBFeat[iB][j])
-                asp.cam_gen(subArgs)
+                # RPC 2 PM rough
+                asp.cam_gen(ASfMFunc.SubArgs_Camgen(objPath, objBlocks.lstBFeat[iB][j]))
                 
+                sys.exit()
                 # Add distortion
                 subArgs=ASfMFunc.SubArgs_DistoCam(objPath, objBlocks.lstBFeat[iB][j])
                 asp.convert_pinhole_model(subArgs)
@@ -164,10 +168,12 @@ if __name__ == "__main__":
                     asp.mapproject(ASfMFunc.SubArgs_Ortho('Init', objPath, objBlocks.lstBFeat[iB][j], objPath.pProcData, args.epsg))
                    
             print()
-            if args.p==1: continue
+            
+            if iProc <= lstProcLvl.index('cam'): continue
 
             ASfMFunc.CtlCamStat(lstCtlCam)
-            if args.p==2: continue
+            
+            if iProc <= lstProcLvl.index('ctrl'): continue
             #---------------------------------------------------------------
             # Orbit visualisation
             #---------------------------------------------------------------
@@ -176,13 +182,14 @@ if __name__ == "__main__":
             regexProcCam= os.path.join(objPath.pProcData, objPath.nTsai[1].format('*'))
             pathOut= objPath.pOrbit
             
-            if not os.path.exists(pathOut): 
-                subArgs=(regexProcImg,
-                        regexProcCam,
-                        '-o', pathOut,
-                        )
-                asp.orbitviz(subArgs)
-            if args.p==3: continue
+            if os.path.exists(pathOut): os.remove(pathOut)
+            subArgs=(regexProcImg,
+                    regexProcCam,
+                    '-o', pathOut,
+                    )
+            asp.orbitviz(subArgs)
+            
+            if iProc <= lstProcLvl.index('orb'): continue
             
             #---------------------------------------------------------------
             # Bundle adjustment series
@@ -227,7 +234,7 @@ if __name__ == "__main__":
             else:
                 logger.warning('%s folder already exists (skipped)'% os.path.basename(folderKP))
             
-            if args.p==4: continue
+            if iProc <= lstProcLvl.index('kp'): continue
 
             #---------------------------------------------------------------
             # EO adjustment
@@ -260,9 +267,7 @@ if __name__ == "__main__":
                     [asp.mapproject(ASfMFunc.SubArgs_Ortho('EO_std', objPath, objBlocks.lstBFeat[iB][j], objPath.prefEO_std, args.epsg)) for j in range(nbFeat)]
 
 
-
-
-            if args.p==6: continue
+            if iProc <= lstProcLvl.index('eo'): continue
 
             #---------------------------------------------------------------
             # IO adjustment
@@ -271,7 +276,8 @@ if __name__ == "__main__":
                 logger.info('# IO adjustment')
                 asp.parallel_bundle_adjust(subArgs.IO(objPath.prefEO, objPath.prefIO))
                 ASfMFunc.KpCsv2Geojson(objPath.prefIO)
-            if args.p==7: raise RuntimeError("Process end")
+            
+            if iProc >= lstProcLvl.index('io'): continue
 
             #---------------------------------------------------------------
             # Export cam
@@ -286,7 +292,8 @@ if __name__ == "__main__":
                 asp.convert_pinhole_model(subArgs)
                 
             print()
-            if args.p==8: continue
+            
+            if iProc <= lstProcLvl.index('exp'): continue
               
     #---------------------------------------------------------------
     # Exception management

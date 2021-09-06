@@ -71,6 +71,8 @@ def SubArgs_Camgen(pathObj, featCur):
             '--optical-center', ' '.join([str(k+constSat) for k in camCentre]),
             '--focal-length', str(camFocal+constSat),
             '--pixel-pitch', camPitch,
+            '--pixel-values', "'0.0 0.0,0.0 533.5,0.0 1067.0,0.0 1600.5,0.0 2134.0,1650.0 0.0,1650.0 533.5,1650.0 1067.0,1650.0 1600.5,1650.0 2134.0,3300.0 0.0,3300.0 533.5,3300.0 1067.0,3300.0 1600.5,3300.0 2134.0,4950.0 0.0,4950.0 533.5,4950.0 1067.0,4950.0 1600.5,4950.0 2134.0,6600.0 0.0,6600.0 533.5,6600.0 1067.0,6600.0 1600.5,6600.0 2134.0'", 
+            
             '-o', pathTsai,
             '--gcp-file', pathGcp,
             #'--gcp-std', '10',
@@ -849,6 +851,7 @@ def KpCsv2Gcp(pathIn, prefOut, accuXY=1, accuZ=1, accuI=1):
     
     fileOut.close()
     return 0
+
 
 #=======================================================================
 #main

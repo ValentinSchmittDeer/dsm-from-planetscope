@@ -292,8 +292,8 @@ def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
                 if len(geomCur.interiors):
                     for ringCur in geomCur.interiors:
                         geomOut["geometry"]["coordinates"][0].append(list(ringCur.coords))
-                        
-            objOut["features"].append(geomOut)
+                 
+            objOut["Features"].append(geomOut)
     
     SubLogger('INFO', 'Min BH (r:%i): %.4f'% (k,SortBH(lstPair[i])))
     if i==nbPair-1: SubLogger('WARNING', 'Not enough stereopairs to fill the AOI')
