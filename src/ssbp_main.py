@@ -78,7 +78,6 @@ def Main(args):
         if not 0<=args.cloudUnder<=100: raise RuntimeError("-cloudUnder must be [0-100]")
         
         if args.dateAcq:
-            if not len(args.dateAcq)==2: raise RuntimeError("-dateAcq must be 2 dates")
             for i in range(2):
                 dateStr=args.dateAcq[i]
                 dateObj=datetime.strptime(dateStr,'%Y-%m-%d')
@@ -253,7 +252,7 @@ if __name__ == "__main__":
         parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
         parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
         parser.add_argument('-cloudUnder', type=int, default=10, help='Maximum cloud coverage, %% integer (default: 10)')
-        parser.add_argument('-dateAcq', nargs='+', help='Acquisition date yyyy-mm-dd past in the order')
+        parser.add_argument('-dateAcq', nargs=2, help='Acquisition date yyyy-mm-dd past in the order')
         parser.add_argument('-inst', nargs='+', default=['PS2'], help='Dove generation(s) <PS2|PS2.SD|PSB.SD> (default:PS2)')
         parser.add_argument('-viewAngle', type=float, help='Maximum view angle')
         parser.add_argument('-gsd', type=float, help='Maximum gsd')

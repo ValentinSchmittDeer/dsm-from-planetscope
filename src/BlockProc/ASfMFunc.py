@@ -134,19 +134,22 @@ def SubArgs_Ortho(step, pathObj, featCur, dirTsai, epsg=4326):
         if not dirTsai.endswith('/'): dirTsai+='/'
     else:
         if not dirTsai.endswith('-'): dirTsai+='-'
-    pathTsai=dirTsai+nameTsai
-    if not os.path.exists(pathTsai): 
-        lstPath=glob(dirTsai+'*'+nameTsai)
-        if len(lstPath)==1:
-            pathTsai=lstPath[0]
-        else:
-            SubLogger('ERROR', 'camera tsai file not found, %s'% pathTsai)
-            return 0
+    
+    lstPath=glob(dirTsai+'*'+nameTsai)
+    if len(lstPath)==1:
+        pathTsai=lstPath[0]
+    else:
+        SubLogger('ERROR', 'camera tsai file not found, %s'% pathTsai)
+        return 0
 
     # New files
     pathOrtho=pathObj.pOrtho.format(nameImg1B.split('.')[0],
                                     step)
     if os.path.exists(pathOrtho): return 0
+    if not os.path.exists(os.path.dirname(pathOrtho)): os.mkdir(os.path.dirname(pathOrtho))
+
+    # Copy Tsai
+    os.system('cp %s %s'% (pathTsai, os.path.dirname(pathOrtho)))
 
     # Arguments
     subArgs=[pathObj.pDem,
@@ -199,15 +202,89 @@ def SubArgs_ExportCam(prefIn, pathObj, featCur):
     
     return subArgs
 
-def SubArgs_StereoKP(pathObj, pairCur):
+def SubArgs_StereoKP_RPC(pathObj, pairCur, softness=0):
     '''
     Create a list of stereo_pprc parameters for key point extraction per pair
 
     pathObj (obj): PathCur class from VarCur
     featCur (json): current stereo pair desciptor
+    softness (int [0-2]): interger designing feature filtering parameter set hardness, 0:hard 2:soft (release freedom)
     out:
         subArgs (list): argument list
     '''
+    # Feature matching hardness
+    # (ip-per-tile, ip-uniqueness-threshold, epipolar-threshold, disable-tri-ip-filter)
+    lstHard=(('1000', '0.3', '2', '0'), # Hard
+             ('200', '0.2', '5', '1'), 
+             ('1000', '0.4', '3', '0'), # Soft
+             )
+    
+    if not -1<softness<len(lstHard): SubLogger('CRITICAL', 'Feature extraction and matching hardness out of range, not enough features (key points)')
+
+    dirOut=os.path.dirname(pathObj.prefStereoKP)
+    if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
+    
+    subArgs=[]
+
+    for idCur in sorted(pairCur['properties']['scenes'].split(';')):
+        pathImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idCur))
+        if not os.path.exists(pathImg): SubLogger('CRITICAL', 'Image not found: %s'% idCur)
+        subArgs.append(pathImg)
+
+    subArgs.append(pathObj.prefStereoKP)
+
+    # Arguments
+    subArgs+=[## Basics
+                '-t', 'rpc', # set stereo session pinhole OR nadirpinhole
+                '--datum', 'WGS_1984', # set datum
+                '--nodata-value', '0', # nodata, do not process <= x
+                '--skip-rough-homography', # Skip datum-based rough homography
+                '--skip-image-normalization', # 
+                #'--ip-debug-images', '1', # Print image with key points on: written at process root (in docker)
+                ## Feature extraction
+                '--alignment-method', 'affineepipolar', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
+                '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
+                '--ip-per-tile', lstHard[softness][0], # key point number per sub frame
+                #'--individually-normalize', # normalisation param per image not global
+                ## Feature matching
+                #'--ip-inlier-factor', '1e-4', # key point creation filtering (x>1/15 -> more points but worse)
+                '--ip-uniqueness-threshold', lstHard[softness][1], # key point creation filtering (x>0.7 -> more points but less unique)
+                '--epipolar-threshold', lstHard[softness][2], # key point matching, Max distance to the epipolar line in camera unit
+                ## Feature filtering
+                '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration
+                '--disable-tri-ip-filter', lstHard[softness][3], # disable the triangulation filtering
+                #'--ip-triangulation-max-error', '1000', # filter out key point based on triangulation
+                #'--stddev-mask-thresh', '0.01', # mask (filter) key point whether the local standard deviation is less
+                #'--stddev-mask-kernel', '51', # size of the local standard deviation computation
+                ##
+                #'--num-matches-from-disparity', '100', # create key point grid after disparity computation (needs full stereo process)
+                '--num-matches-from-disp-triplets', '1000', # same linking multiview points
+                #'--min-triangulation-angle', '0.01'
+                '--filter-mode', '0', # Avoid filtering: spare time
+                ]
+
+
+    return subArgs
+
+def SubArgs_StereoKP_PM(pathObj, pairCur, softness=0):
+    '''
+    Create a list of stereo_pprc parameters for key point extraction per pair
+
+    pathObj (obj): PathCur class from VarCur
+    featCur (json): current stereo pair desciptor
+    softness (int [0-2]): interger designing feature filtering parameter set hardness, 0:hard 2:soft (release freedom)
+    out:
+        subArgs (list): argument list
+    '''
+    # Feature matching hardness
+    # (ip-per-tile, ip-uniqueness-threshold, epipolar-threshold, disable-tri-ip-filter)
+    lstHard=(('200', '0.2', '3', '1'), # Hard
+             ('200', '0.4', '3', '1'), 
+             ('1000', '0.4', '3', '0'), # Soft
+             )
+    
+    if not -1<softness<len(lstHard): SubLogger('CRITICAL', 'Feature extraction and matching hardness out of range, not enough features (key points)')
+
     dirOut=os.path.dirname(pathObj.prefStereoKP)
     if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
     
@@ -230,27 +307,29 @@ def SubArgs_StereoKP(pathObj, pairCur):
                 '-t', 'nadirpinhole', # set stereo session pinhole OR nadirpinhole
                 '--datum', 'WGS_1984', # set datum
                 '--nodata-value', '0', # nodata, do not process <= x
-                '--skip-rough-homography', #Skip datum-based rough homography
-                #'--ip-debug-images', '1', # Print image with key points on
+                '--skip-rough-homography', # Skip datum-based rough homography
+                '--skip-image-normalization', # 
+                #'--ip-debug-images', '1', # Print image with key points on: written at process root (in docker)
                 ## Feature extraction
-                '--alignment-method', 'homography', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
+                '--alignment-method', 'affineepipolar', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
                 '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--ip-per-tile', '100', # key point number per sub frame
+                '--ip-per-tile', lstHard[softness][0], # key point number per sub frame
                 #'--individually-normalize', # normalisation param per image not global
                 ## Feature matching
-                #'--ip-inlier-factor', '0.1', # key point creation filtering (x>1/15 -> more points but worse)
-                '--ip-uniqueness-threshold', '0.3', # key point creation filtering (x>0.7 -> more points but less unique)
-                '--epipolar-threshold', '10', # key point matching, Max distance to the epipolar line in camera unit
+                #'--ip-inlier-factor', '1e-4', # key point creation filtering (x>1/15 -> more points but worse)
+                '--ip-uniqueness-threshold', lstHard[softness][1], # key point creation filtering (x>0.7 -> more points but less unique)
+                '--epipolar-threshold', lstHard[softness][2], # key point matching, Max distance to the epipolar line in camera unit
                 ## Feature filtering
                 '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration
-                #'--disable-tri-ip-filter', '1', # disable the triangulation filtering
-                '--ip-triangulation-max-error', '1000', # filter out key point based on triangulation
+                '--disable-tri-ip-filter', lstHard[softness][3], # disable the triangulation filtering
+                #'--ip-triangulation-max-error', '1000', # filter out key point based on triangulation
                 #'--stddev-mask-thresh', '0.01', # mask (filter) key point whether the local standard deviation is less
                 #'--stddev-mask-kernel', '51', # size of the local standard deviation computation
                 ##
                 #'--num-matches-from-disparity', '100', # create key point grid after disparity computation (needs full stereo process)
                 '--num-matches-from-disp-triplets', '1000', # same linking multiview points
                 #'--min-triangulation-angle', '0.01'
+                '--filter-mode', '0', # Avoid filtering: spare time
                 ]
 
 
@@ -270,21 +349,18 @@ def CopyMatches(prefIn, prefOut, kp='match'):
     if not os.path.exists(dirOut): os.mkdir(dirOut)
 
     # Copy match
-    if kp=='disp':
-        extIn='-disp-*.match'
+    if kp=='disp' and glob(prefIn+'-disp-*.match'):
+        lstPathIn=glob(prefIn+'-disp-*.match')
     elif kp=='clean' and glob(prefIn+'*-clean.match'):
-        extIn='*-clean.match'
-    elif kp=='match' and glob(prefIn+'*.match'):
-        extIn='-????????_*.match'
+        lstPathIn=glob(prefIn+'*-clean.match')
+    elif kp=='match' and glob(prefIn+'-????????_*.match'):
+        lstPathIn=glob(prefIn+'-????????_*.match')
     elif kp=='none':
         return 0
     else:
-        SubLogger('CRITICAL', 'match file not found')
-    
-    lstPathIn=glob(prefIn+extIn)
-    if not lstPathIn: 
-        SubLogger('ERROR', 'Match files not found')
+        SubLogger('ERROR', 'match file not found')
         return 1
+    
     for pathIn in lstPathIn:
         pathOut=pathIn.replace(prefIn,prefOut).replace('-disp','').replace('-clean','')
         cmd='cp %s %s'% (pathIn, pathOut)
@@ -313,7 +389,7 @@ class SubArgs_BunAdj:
                 ## Intrinsic imporvement
                 
                 ## Least square
-                '--num-passes', '3', # iteration number
+                '--num-passes', '1', # iteration number
                 
                 ## Storage
                 '--report-level', '20',
@@ -380,36 +456,31 @@ class SubArgs_BunAdj:
         
         return args
 
-    def Free(self, prefIn, prefOut):
+    def Init(self, prefIn, prefOut):
         '''
-        Parameters which release extrinsic cameras
+        Parameters with no freedom and not adjustment
         '''
+        strInd=' '.join([str(i) for i in range(self.nbScene)])
+
         args=self.argsInit.copy()
-        if os.path.isdir(prefIn):
-            if not prefIn.endswith('/'): prefIn+='/'
-        else:
-            if not prefIn.endswith('-'): prefIn+='-'
+        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
         lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
         if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
         args+= lstPathTsai
         args+=['-o', prefOut]
         args+=[## Key points
                 '--force-reuse-match-files', # use former match file: using -o prefix
-                '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
+                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
-                #'--rotation-weight', '0', 
-                #'--translation-weight', '100', # EO weight (x>0 -> stiffer)
-                # OR
-                '--camera-weight', '100', # EO weight (x>1 -> stiffer)
-                '--robust-threshold', '1', # set cost function threshold
-                #'--remove-outliers-params', "'90 2 0.3 1'", # outlier filtering param
-                #'--remove-outliers-by-disparity-params', '80.0 1.0', # outlier filtering param
-                #'--elevation-limit', '0 4000', # outlier filtering param
+                '--heights-from-dem', self.pathDem, # fix key point height from DSM
+                '--heights-from-dem-weight', '1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
+                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
+                '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
                 ## Least square
-                '--max-iterations', '100', # in non-linear least square (per pass)
-                #'--parameter-tolerance', '1e-5', # least square limit
+                '--max-iterations', '1', # in non-linear least square (per pass)
                 ]
-
+        #args[args.index('--min-matches')+1]='1'
+        
         return args
 
     def EO(self, prefIn, prefOut):
@@ -430,22 +501,20 @@ class SubArgs_BunAdj:
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 #'--heights-from-dem', self.pathDem, # fix key point height from DSM
-                #'--heights-from-dem-weight', '10', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
+                #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 #'--reference-terrain', self.pathDem, # When using a reference terrain, must specify a list of disparities.
                 ## Model
                 #'--rotation-weight', '0.01', 
                 #'--translation-weight', '0.1', # EO weight (x>0 -> stiffer)
                 # OR
-                #'--camera-weight', '1', # EO weight (x>1 -> stiffer)
+                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
                 ## Least square
                 #'--robust-threshold', '1000', # set cost function threshold
                 #'--max-disp-error', '1', # with ref DSM
                 ## Least square
-                '--max-iterations', '100', # in non-linear least square (per pass)  
+                '--max-iterations', '200', # in non-linear least square (per pass)  
                 #'--parameter-tolerance', '1e-5', # least square limit 
                 ]
-        args[args.index('--num-passes')+1]='1'
-
 
         return args
 
@@ -482,43 +551,6 @@ class SubArgs_BunAdj:
         args+=['-o', prefOut]
         args.remove('--save-cnet-as-csv')
 
-        return args
-
-    def Full(self, prefIn, prefOut):
-        '''
-        Parameters for a full BA (EO, IO, KP extraction)
-        '''
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn):
-            if not prefIn.endswith('/'): prefIn+='/'
-        else:
-            if not prefIn.endswith('-'): prefIn+='-'        
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args+=['-o', prefOut]
-        args+=[## Key points
-                '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--ip-per-tile', '1000', # key point number
-                '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
-                '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
-                '--individually-normalize', # normalisation param per image not global 
-                '--epipolar-threshold', '5', # key point matching, Max distance to the epipolar line in camera unit
-                '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
-                '--enable-tri-ip-filter', # filter out key point based on triangulation
-                '--heights-from-dem', self.pathDem, # fix key point height from DSM
-                '--heights-from-dem-weight', '1', # weight of key point height from DSM
-                ## Model
-                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
-                #'--solve-intrinsics', # include IO in BA (default=False) 
-                #'--max-disp-error', '1', # with ref DSM
-                '--remove-outliers-params', '"90.0 1.0 0.3 1" ' # outlier filtering param
-                #'--remove-outliers-by-disparity-params', '70.0 2.0 ' # outlier filtering param
-                #'--elevation-limit', '0.0 4000.0 ' # outlier filtering param
-                ## Least square
-                '--max-iterations', '100', # in non-linear least square (per pass) 
-                #'--parameter-tolerance', '1e-1', # least square limite
-                ]
         return args
 
     def Fix(self, prefIn, prefOut):
@@ -807,10 +839,11 @@ def KpCsv2Gcp(pathIn, prefOut, accuXY=1, accuZ=1, accuI=1):
             # StdDev
             for i in (3,4):
                 coord=float(ptIn[lenG+j*lenI+i-2])
-                if coord%1:
-                    ptOut.append(str(accuI*0.1))
-                else:
-                    ptOut.append(str(accuI))
+                ptOut.append(str(accuI))
+                #if coord%1:
+                #    ptOut.append(str(accuI*0.1))
+                #else:
+                #    ptOut.append(str(accuI))
                 
         fileOut.write(' '.join(ptOut)+'\n')
     
