@@ -100,13 +100,14 @@ class ReadBA:
                         self.dicTsai[name][-1]['resiTrans-%s'% step]=float(words[1])
                         self.dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
             
-    def Valid(self):
+    def Valid(self, checkBA):
         if len(self.dicTsai)==1: logger.warning('Only one scene in the assessment')
         
         msg=''
         lstLength=[len(self.dicTsai[key])-1 for key in self.dicTsai]
         if not all(lstLength): msg='Not enough BA for every images (check and add prefix -pref)'
         
+        if not checkBA: return msg
         lstCheck=[]
         for step in ('initial', 'final'):
             lstCheck+=['numKP-%s'% step in self.dicTsai[key][i] for key in self.dicTsai for i in range(1,len(self.dicTsai[key]))]
@@ -247,6 +248,9 @@ def GraphEO(dicTsai, argsCur):
 
     i=-1
     for key in dicTsai:
+        ###
+        argsCur.s=1
+        ###
         if len(dicTsai[key])==1: continue
 
         i+=1
@@ -259,14 +263,22 @@ def GraphEO(dicTsai, argsCur):
 
 #sat:lng_deg       sat:lat_deg     sat:alt_km       ecefX_m           ecefY_m                ecefZ_m             
 #-115.716020192 35.2848819683 492.364006937               
-        # Camera centre Init
-        graph.plot(matPts[0,0], matPts[0,1], matPts[0,2],'r^',label='', markersize=10)
-        graph.text(matPts[0,0]+args.s, matPts[0,1]+args.s, matPts[0,2]+args.s,str(i))
+        
         ############
         ptSat=np.array([-2436039.819383114, -5058097.105275761, 3948121.8757154937])
         graph.plot(ptSat[0], ptSat[1], ptSat[2] ,'g^',label='Sat', markersize=10)
         vect=np.array([[0],[0],[100]])*argsCur.s
-        print(norm(ptSat-matSclPts[1,:]))
+        
+        graph.plot((ptSat[0],matSclPts[0,0]),
+                    (ptSat[1],matSclPts[0,1]), 
+                    (ptSat[2],matSclPts[0,2]),
+                    'g--',label='', markersize=10)
+        print(norm(ptSat-matSclPts[0,:]))
+        ##############
+
+        # Camera centre Init
+        graph.plot(matPts[0,0], matPts[0,1], matPts[0,2],'r^',label='', markersize=10)
+        graph.text(matPts[0,0]+args.s, matPts[0,1]+args.s, matPts[0,2]+args.s,str(i))
 
         # Camera orientation Init
         #vect=np.array([[0],[0],[10]])*argsCur.s
@@ -425,7 +437,7 @@ if __name__ == "__main__":
             logger.info('# Read BA')
             logger.info('Prefix: %s'% prefix)
 
-            objBa=ReadBA(args.init, objTemp.nTsai[1], prefix)
+            objBa=ReadBA(args.init, objTemp.nTsai[0], prefix)
             
             lstBaName=[]
             for pathBA in args.ba+args.cam:
@@ -435,9 +447,9 @@ if __name__ == "__main__":
 
                 if pathBA in args.ba: objBa.AddBA(pathBA)
 
-            if args.ba and objBa.Valid(): 
+            if objBa.Valid(len(args.ba)): 
                 print(objBa)
-                raise RuntimeError(objBa.Valid())
+                raise RuntimeError(objBa.Valid(len(args.ba)))
         #---------------------------------------------------------------
         # Read KP
         #---------------------------------------------------------------

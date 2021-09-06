@@ -166,9 +166,10 @@ class PathCur:
       self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
 
       self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4])
-      self.nTsai=('{}_Dist0Init.tsai', 
-                  '{}_Dist1Ba.tsai',
-                  '{}_Dist2Adj.tsai')
+      self.nTsai=('{}_0Rough.tsai', 
+                  '{}_1Init.tsai',
+                  '{}_2Adj.tsai',
+                )
       
       self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
 
