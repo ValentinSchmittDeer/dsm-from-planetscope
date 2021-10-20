@@ -165,13 +165,13 @@ class ProcessStdout:
         self.startTime=datetime.now()
         self.name=name
         if not inputCur: 
-                self.Error()
+                self.Error('inputCur is requiered')
         
         if mode=='bar':
             if type(inputCur)==int and inputCur>0:
                 self.iMax=inputCur
             else:
-                self.Error()
+                self.Error('In bar mode, inputCur must a interger above 0')
             if lengthBar:
                 self.lenBar=lengthBar
             else:
@@ -184,15 +184,15 @@ class ProcessStdout:
             if type(inputCur)==list:
                 self.list=inputCur
             else:
-                self.Error()
+                self.Error('In list mode, inputCur must be a list')
             self.iMax=len(inputCur)
             if lengthBar:
                 self.lenBar=lengthBar
             else:
                 self.lenBar=30
     
-    def Error(self):
-        print(colored("ProcessStdout Error:", "red", attrs=["blink"]))
+    def Error(self, msg):
+        print(colored("ProcessStdout Error: ", "red", attrs=["blink"]), msg)
         print(self.__doc__)
         sys.exit()
     

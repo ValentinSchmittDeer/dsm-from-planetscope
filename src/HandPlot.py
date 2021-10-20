@@ -78,7 +78,8 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Read
         #---------------------------------------------------------------
-        fig, graph = plt.subplots(len(args.dir))
+        #fig, graph = plt.subplots(len(args.dir))
+        fig, graph = plt.subplots(len(args.dir), 1)
         
         lstColours=list(mcolors.TABLEAU_COLORS.values())
 
@@ -95,19 +96,40 @@ if __name__ == "__main__":
                     lstIn.append((r,-c,e))
             
             matIn=np.array(lstIn)
-            #print(matIn)
-            #print(matIn.shape)
+
+            pathIn2=glob(os.path.join(dirIn, '*.gcp2disto'))[0]
+            if pathIn2:
+                lstIn=[]
+                with open(pathIn2) as fileIn:
+                    for lineCur in fileIn:
+                        if not lineCur.startswith('Corner and error'): continue
+                        txtIn=lineCur.strip().split(':')[1].strip('( ')
+                        
+                        r,c=[float(i) for i in txtIn.split(')')[0].split()]
+                        e=float(txtIn.split(')')[1])
+                        lstIn.append((r,-c,e))
+                
+                matIn2=np.array(lstIn)
+
             #---------------------------------------------------------------
             # Plot
             #---------------------------------------------------------------
-            graph[i].add_patch(Rectangle([0,0], 6600, -2134, fill=False, color='k'))
-            #graph[i].plot(matIn[:,0], matIn[:,1], '.', color=lstColours[i])
-            [graph[i].add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*10, color='r', fill=True)) for j in range(matIn.shape[0]//2)]
-            [graph[i].add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*10, color='g', fill=True)) for j in range(matIn.shape[0]//2,matIn.shape[0])]
+            if len(args.dir)==1:
+                graphCur=graph
+            else:
+                graphCur=graph[i]
             
+            s=(50, 50, 50, 50)[i]
+            graphCur.add_patch(Rectangle([0,0], 6600, -2134, fill=False, color='b'))
             
-            graph[i].axis('equal')
-            graph[i].set_title(os.path.basename(dirIn))
+            #[graphCur.add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*s, color='r', fill=True)) for j in range(matIn.shape[0]//2)]
+            #[graphCur.add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*s, color='g', fill=True)) for j in range(matIn.shape[0]//2,matIn.shape[0])]
+            [graphCur.add_patch(plt.Circle((matIn2[j,0], matIn2[j,1]), matIn2[j,2]*s, color='b',fill=True)) for j in range(matIn2.shape[0])]
+            #graphCur.plot(matIn[:,0], matIn[:,1], '+', color=lstColours[i])
+            
+            graphCur.axis('equal')
+            graphCur.set_title(os.path.basename(dirIn)+' (scale %i)'% s)
+
         
         plt.show()
         #---------------------------------------------------------------

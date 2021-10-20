@@ -32,16 +32,16 @@ class AspPython():
         from importlib.util import find_spec
         moduleSpec=find_spec('planet_common')
         
+        # Check whether the container exists
+        outCmd=os.popen('docker images').readlines()
+        imgName=''
+        for lineCur in outCmd:
+            if 'stereo_docker2' in lineCur.strip().split()[0]:
+                imgName=lineCur.strip().split()[0]
+        if not imgName: SubLogger('CRITICAL', 'sudo docker pull us.gcr.io/planet-ci-prod/stereo_docker2:latest')  
+
         # Vagrant or GVM 
         if moduleSpec:
-            # Check whether the container exists
-            outCmd=os.popen('docker images').readlines()
-            imgName=''
-            for lineCur in outCmd:
-                if 'stereo_docker2' in lineCur.strip().split()[0]:
-                    imgName=lineCur.strip().split()[0]
-            if not imgName: SubLogger('CRITICAL', 'sudo docker pull us.gcr.io/planet-ci-prod/stereo_docker2:latest')  
-
             # mount data directories
             self.rootFolder='/vagrant'
 
@@ -51,14 +51,12 @@ class AspPython():
             # All arguments can be passed in command lines.
             # If you still wnat to use stereo.default file, create it next to ASP.py and add -v path/BlockProc/stereo.default:/app/stereo.default
 
-
-            self.aspCmd='docker run -it -v {0}:{0} {1}'.format(self.rootFolder, imgName)
-
         # Local system
         else:
-            self.rootFolder='/'
-            self.aspCmd=''
+            self.rootFolder='/home/valentinschmitt'
         
+        self.aspCmd='docker run -it -v {0}:{0} {1}'.format(self.rootFolder, imgName)
+
     def _ValidArgs(self, subArgs):
         '''
         Check the whether all path in the argument list a absolute. It is 
@@ -113,11 +111,18 @@ class AspPython():
     def cam_gen(self, subArgs):
         fun='cam_gen'
         if not subArgs: return 1
-        pathOut=[arg for arg in subArgs if arg.endswith('tif')][0].replace('.tif', '.'+fun)
+        #pathOut=[arg for arg in subArgs if arg.endswith('tif')][0].replace('.tif', '.'+fun)
+        pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
 
     def convert_pinhole_model(self, subArgs):
         fun='convert_pinhole_model'
+        if not subArgs: return 1
+        pathOut=None
+        return self._RunCmd_debug(fun, subArgs, pathOut)
+
+    def cam2rpc(self, subArgs):
+        fun='cam2rpc'
         if not subArgs: return 1
         pathOut=None
         return self._RunCmd(fun, subArgs, pathOut)
@@ -126,7 +131,7 @@ class AspPython():
         fun='mapproject'
         if not subArgs: return 1
         pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd_debug(fun, subArgs, pathOut)
 
     def orbitviz(self, subArgs):
         fun='orbitviz'
@@ -144,7 +149,7 @@ class AspPython():
         fun='bundle_adjust'
         if not subArgs: return 1
         pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd(fun, subArgs, pathOut)
 
     def parallel_bundle_adjust(self, subArgs):
         fun='parallel_bundle_adjust'
@@ -167,7 +172,7 @@ class AspPython():
         fun='stereo'
         if not subArgs: return 1
         pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd(fun, subArgs, pathOut)
 
     def parallel_stereo(self, subArgs):
         fun='parallel_stereo'

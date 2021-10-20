@@ -52,6 +52,11 @@ __all__ =[# SSBP
 
           ]
 
+import os, json
+from glob import glob
+from OutLib.LoggerFunc import SetupLogger, SubLogger
+SetupLogger(name=__name__)
+        
 ## SSBP
 # Search variables
 urlSearch= 'https://api.planet.com/data/v1/searches'
@@ -130,64 +135,57 @@ class PathCur:
             baIO: IO folder
     '''
     def __init__(self, pathDir, bId, pathDem, checkRoutine=True):
-      import os
-      from glob import glob
-      from OutLib.LoggerFunc import SetupLogger, SubLogger
-      SetupLogger(name=__name__)
+        # Folder
+        self.pB=os.path.join(pathDir, bId)
+        lstFolder=glob(os.path.join(self.pB, nameBucket.format(bId,'???')))
+        if checkRoutine and not len(lstFolder)==1: SubLogger('CRITICAL', 'Local data folder not (or several exist)')
+        self.pData=lstFolder[0] if len(lstFolder)==1 else 'Fake_L1A'
+        self.pProcData='{}_ProcData'.format(self.pData)
+        if checkRoutine and not os.path.exists(self.pProcData): os.mkdir(self.pProcData)
 
-      self.pB=os.path.join(pathDir, bId)
-      self.pDem=pathDem
-      self.pStereoLst=os.path.join(self.pB, '{}_Stereo.txt'.format(bId))
-      self.pOrbit=os.path.join(self.pB,'%s_InitialCam.kml'% bId)
+        # Level
+        self.l=self.pData.split('_')[-1]
+        if checkRoutine and not self.l in dicLevel.keys(): SubLogger('CRITICAL', 'Level unknown')
 
-      lstFolder=glob(os.path.join(self.pB, nameBucket.format('*','???')))
-      
-      if checkRoutine and not len(lstFolder)==1: SubLogger('CRITICAL', 'Local data folder not (or several exist)')
-      self.pData=lstFolder[0] if len(lstFolder)==1 else 'Fake_L1A'
+        # Files
+        self.pDem=pathDem
+        self.pStereoLst=os.path.join(self.pB, '{}_Stereo.txt'.format(bId))
+        #self.pOrbit=os.path.join(self.pB,'%s_InitialCam.kml'% bId)
+        self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
 
-      self.pProcData='{}_ProcData'.format(self.pData)
-      if checkRoutine and not os.path.exists(self.pProcData): os.mkdir(self.pProcData)
+        # Extention
+        self.extFeat=dicLevel[self.l][1]
+        self.extRpc='{}_RPC.TXT'.format(self.extFeat[:-4])
+        self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4])
+        self.extRpc1B='{}_RPC.TXT'.format(self.extFeat1B[:-4])
+        self.extRpc1Bx='{}.XML'.format(self.extFeat1B[:-4])
+        self.nTsai=('{}_0Rough.tsai', 
+                    '{}_1Init.tsai',
+                    '{}_2Adj.tsai',
+                    '{}_3Bal.tsai',
+                    )
+        # Prefix
+        self.prefStereoKP= os.path.join(pathDir, bId, 'ASP_StereoKeyPoints','SKP')
+        self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
+        self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
+        self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
+        self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
 
-      #'pPairs': os.path.join(pathDir, bId, bId+'_KPpairs.txt'),
-
-      self.l=self.pData.split('_')[-1]
-      if checkRoutine and not self.l in dicLevel.keys(): SubLogger('CRITICAL', 'Level unknown')
-
-      self.extFeat=dicLevel[self.l][1]
-
-      self.prefStereoKP= os.path.join(pathDir, bId, 'ASP_StereoKeyPoints','SKP')
-      self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
-      self.prefEO= os.path.join(pathDir, bId, 'ASP_Extrinsic','EO')
-      ### Std KP
-      self.prefKP_std= os.path.join(pathDir, bId, 'ASP_KeyPoints-Std','KP')
-      self.prefEO_std= os.path.join(pathDir, bId, 'ASP_Extrinsic-Std','EO')
-
-      self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
-      self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
-
-      self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
-
-      self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4])
-      self.nTsai=('{}_0Rough.tsai', 
-                  '{}_1Init.tsai',
-                  '{}_2Adj.tsai',
-                )
-      
-      self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
+        self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
 
     def __str__(self):
-      return str(self.__dict__)
+      return json.dumps(self.__dict__, indent='\t', separators=(',', ':'))
 
 ## ASfM
 # Dove-C, in  pxl: f=127090.909, c=3300 2178, p=1
 # Dove-C, in  mm: f=699, c=18.15 12.1, p=5.5e-3
 camCentre=(18.15, 12.1)
 camFocal=699
-camPitch='5.5e-3'
+camPitch=5.5e-3
 #<TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
 camDistBa='TsaiLensDistortion'
 camDistExp='BrownConradyDistortion'
-factConstSat=1e-6
+factConstSat=1e-9
 
 gsdOrth=4
 

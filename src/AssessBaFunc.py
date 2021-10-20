@@ -269,11 +269,11 @@ def GraphEO(dicTsai, argsCur):
         graph.plot(ptSat[0], ptSat[1], ptSat[2] ,'g^',label='Sat', markersize=10)
         vect=np.array([[0],[0],[100]])*argsCur.s
         
-        graph.plot((ptSat[0],matSclPts[0,0]),
-                    (ptSat[1],matSclPts[0,1]), 
-                    (ptSat[2],matSclPts[0,2]),
+        graph.plot((ptSat[0],matSclPts[1,0]),
+                    (ptSat[1],matSclPts[1,1]), 
+                    (ptSat[2],matSclPts[1,2]),
                     'g--',label='', markersize=10)
-        print(norm(ptSat-matSclPts[0,:]))
+        print(norm(ptSat-matSclPts[1,:]))
         ##############
 
         # Camera centre Init

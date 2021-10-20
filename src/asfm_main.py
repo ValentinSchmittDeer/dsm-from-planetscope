@@ -30,74 +30,38 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-featIdTest=('20210112_180848_0f15',
-'20210112_180847_0f15',
-'20210107_180314_1040',
-'20210107_180316_1040',
-'20210105_180642_0f22',
-'20210105_180643_0f22',
-    )
-# In track
-#featIdTest=('20210107_180314_1040','20210107_180316_1040',)
-# Cross date
-#featIdTest=('20210107_180314_1040','20210105_180642_0f22',)
-# Cross track
-#featIdTest=('20210112_180848_0f15','20210107_180314_1040',)
-# One
-featIdTest=('20210112_180848_0f15',)
-# Tree
-#featIdTest=('20210112_180848_0f15','20210112_180847_0f15','20210105_180642_0f22')
-'''
--t rpc
-point2dem --errorimage
-'''
+# Small Block
+featIdTest=('20201225_180508_1003',
+'20201225_180507_1003',
+'20201220_180803_0f15',
+'20201220_180802_0f15',
+'20201202_153645_0f21',
+'20201202_153644_0f21',
+'20201201_180335_103c',
+'20201201_180334_103c')
+
+#featIdTest=('20210112_180846_0f15',
+# '20210112_180848_0f15',
+# '20210112_180847_0f15',
+# '20210107_180314_1040',
+# '20210107_180316_1040',
+# '20210105_180642_0f22',
+# '20210105_180643_0f22'
+# )
+
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def FixControl(prefIn):
-    logger.error('_______FIX CONTROL_______')
-    ASfMFunc.CopyPrevBA(prefIn, objPath.prefFix)
-    asp.bundle_adjust(subArgs.Fix(prefIn, objPath.prefFix))
-    ASfMFunc.KpCsv2Geojson(objPath.prefFix)
-
-#=======================================================================
-#main
-#-----------------------------------------------------------------------
-if __name__ == "__main__":
+def Main(args):
     try:
-        print()
-        logger = SetupLogger(name=__title__)
-        #---------------------------------------------------------------
-        # Retrieval of arguments
-        #---------------------------------------------------------------
-        parser.add_argument('-i', required=True, help='Working directory')
-        parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
-
-        # Process level
-        #   read: ReadBlock
-        #   cam: CamCreat
-        #   ctrl: CtrlCam
-        #   orb: OrbitVis
-        #   kp: BA-KP
-        #   eo:BA-EO
-        #   io: BA-IO,
-        #   exp:Export
-        parser.add_argument('-p', default='exp', help='Process last step- read: ReadBlock, cam: CamCreat, ctrl: CtrlCam, orb: OrbitVis, kp: BA-KP, eo:BA-EO, io: BA-IO, exp:Export (default: exp)')
-
-        # Optional arguments
-        parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
-        parser.add_argument('-ortho',action='store_true', help='Compute orthophoto from initial and final parameters (default: False)')
-        parser.add_argument('-epsg', default='32611', help='Current ESPG used by initial ortho (default: 32611)')
-
-        args = parser.parse_args()
-        
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
         if not os.path.isfile(args.dem): raise RuntimeError("DEM file not found")
         
-        lstProcLvl=('read', 'cam', 'ctrl', 'orb', 'kp', 'eo', 'io', 'exp')
+        if not args.m in ('rpc','pm'): raise RuntimeError("BA mode unknown")
+        lstProcLvl=('read', 'data', 'ortho', 'kp', 'eo', 'io', 'exp')
         if not args.p in lstProcLvl: raise RuntimeError("Last process step unknown")
         iProc=lstProcLvl.index(args.p)
 
@@ -133,141 +97,228 @@ if __name__ == "__main__":
             objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
             lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
             objBlocks.lstBCouple[iB]=lstTemp
-            
-            ###################
+            #---------------------------------------------------------------
             bId, nbFeat= objBlocks.lstBId[iB]
             logger.info('%s (%i scenes)'% objBlocks.lstBId[iB])
             objPath=PathCur(args.i, bId, args.dem)
-
+            
             if iProc <= lstProcLvl.index('read'): continue
 
             #---------------------------------------------------------------
-            # Camera creation
+            # Process data 
             #---------------------------------------------------------------
-            logger.info('# Camera creation')
-            procBar=ProcessStdout(name='Scene and camera creation',inputCur=nbFeat)
-            lstCtlCam=[]
+            logger.info('# Process data')
+            procBar=ProcessStdout(name='Process data creation',inputCur=nbFeat)
             for j in range(nbFeat):
                 procBar.ViewBar(j)
+                featCur=objBlocks.lstBFeat[iB][j]
+                idImg=featCur['id']
+                pathImgIn=os.path.join(objPath.pData, objPath.extFeat.format(idImg))
+                pathImgOut=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
                 
-                # RPC 2 PM rough
-                asp.cam_gen(ASfMFunc.SubArgs_Camgen(objPath, objBlocks.lstBFeat[iB][j]))
+                if not os.path.exists(pathImgOut): ASfMFunc.SingleBandImg(pathImgIn, pathImgOut)
+
+            if iProc <= lstProcLvl.index('data'): continue
+
+            #---------------------------------------------------------------
+            # Initial ortho
+            #---------------------------------------------------------------
+            logger.info('# Initial ortho')
+            procBar=ProcessStdout(name='Initial ortho creation',inputCur=nbFeat)
+            for j in range(nbFeat):
+                procBar.ViewBar(j)
+                featCur=objBlocks.lstBFeat[iB][j]
+                idImg=featCur['id']
+                pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
+                pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
+                pathOrtho=objPath.pOrtho.format(idImg, 'Init')
+
+                if not os.path.exists(pathOrtho): asp.mapproject(ASfMFunc.SubArgs_Ortho(pathImgIn, pathRpcIn, objPath.pDem, pathOrtho, args.epsg))
                 
-                sys.exit()
-                # Add distortion
-                subArgs=ASfMFunc.SubArgs_DistoCam(objPath, objBlocks.lstBFeat[iB][j])
-                asp.convert_pinhole_model(subArgs)
+            if iProc <= lstProcLvl.index('ortho'): continue
 
-                if camDistBa=='TsaiLensDistortion': ASfMFunc.Correct_DistoCam(objPath, objBlocks.lstBFeat[iB][j])
-
-                # Controle coords
-                lstCtlCam.append(ASfMFunc.CtlCam(objPath, objBlocks.lstBFeat[iB][j]))
-
-                # Ortho Init
-                if args.ortho:
-                    asp.mapproject(ASfMFunc.SubArgs_Ortho('Init', objPath, objBlocks.lstBFeat[iB][j], objPath.pProcData, args.epsg))
-                   
-            print()
-            
-            if iProc <= lstProcLvl.index('cam'): continue
-
-            ASfMFunc.CtlCamStat(lstCtlCam)
-            
-            if iProc <= lstProcLvl.index('ctrl'): continue
-            #---------------------------------------------------------------
-            # Orbit visualisation
-            #---------------------------------------------------------------
-            logger.info('# Orbit visualisation')
-            regexProcImg= os.path.join(objPath.pProcData, objPath.extFeat1B.format('*'))
-            regexProcCam= os.path.join(objPath.pProcData, objPath.nTsai[1].format('*'))
-            pathOut= objPath.pOrbit
-            
-            if os.path.exists(pathOut): os.remove(pathOut)
-            subArgs=(regexProcImg,
-                    regexProcCam,
-                    '-o', pathOut,
-                    )
-            asp.orbitviz(subArgs)
-            
-            if iProc <= lstProcLvl.index('orb'): continue
-            
             #---------------------------------------------------------------
             # Bundle adjustment series
             #---------------------------------------------------------------
             ASfMFunc.StereoDescriptor(objPath, objBlocks.lstBCouple[iB])
             
             lstImgId=[feat['id'] for feat in objBlocks.lstBFeat[iB]]
-            subArgs=ASfMFunc.SubArgs_BunAdj(objPath, lstImgId)
+            subArgs=ASfMFunc.SubArgs_BunAdj(objPath, lstImgId, args.m)
 
             #---------------------------------------------------------------
             # Key point extraction
             #---------------------------------------------------------------
-            folderKP=os.path.dirname(objPath.prefKP)
-            
-            if not os.path.exists(folderKP):
-                logger.info('# Key point extraction')
-                
-                # Stereo feature extraction
-                for j in range(len(objBlocks.lstBCouple[iB])):
-                    if not objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2: continue
-                    
-                    print('Pair%i'% objBlocks.lstBCouple[iB][j]['id'], end=', ')
-                    softLvl=0
-                    asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, objBlocks.lstBCouple[iB][j], softness=softLvl))
-                    
-                    while ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP, kp='disp'):
-                        raise RuntimeError("ERROR SKP")
-                        softLvl+=1
-                        asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, objBlocks.lstBCouple[iB][j], softness=softLvl))
+            if not os.path.exists(objPath.prefKP+'-cnet.csv'):
+                logger.info('# Key point')
+                folderKP=os.path.dirname(objPath.prefKP)
+                if not os.path.exists(folderKP): os.mkdir(folderKP)
 
-                    ASfMFunc.CopyMatches(objPath.prefStereoKP, objPath.prefKP_std, kp='match')
+                # Feature extraction (stereo)
+                nbComb=len(objBlocks.lstBCouple[iB])
+                lstPair=[objBlocks.lstBCouple[iB][j]['properties']['scenes'] 
+                            for j in range(nbComb) 
+                            if objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2]
+
+                procBar=ProcessStdout(name='Feature extraction',inputCur=len(lstPair))
+                #for j in ():
+                for j, strId in enumerate(lstPair):
+                    procBar.ViewBar(j)
+                    lstId=sorted(strId.split(';'))
+                    
+                    basenameMatch='__'.join([objPath.extFeat1B.format(idCur).split('.')[0] for idCur in lstId])
+                    pathMatch=objPath.prefKP+'-'+basenameMatch+'.match'
+                    if os.path.exists(pathMatch): continue
+
+                    softLvl=0
+                    asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, lstId, softness=softLvl))
+                    
+                    while ASfMFunc.CopyPrevBA(objPath.prefStereoKP, objPath.prefKP, existBool=False, img=False, kp='disp') and softLvl<2:
+                        softLvl+=1
+                        print('\nLvl %i'% softLvl, end='')
+                        asp.stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath, lstId, softness=softLvl))
                 
                 print()
                 
-                # Fixed bundle adjustment: Merge obs and ste SRTM height
-                asp.bundle_adjust(subArgs.Init(objPath.pProcData, objPath.prefKP))
+                # Initialisation bundle adjustment: Merge obs 
+                asp.bundle_adjust(subArgs.KP_RPC(objPath.pProcData, objPath.prefKP))
                 ASfMFunc.KpCsv2Geojson(objPath.prefKP)
-                ###### stsKP
-                asp.bundle_adjust(subArgs.Init(objPath.pProcData, objPath.prefKP_std))
-                ASfMFunc.KpCsv2Geojson(objPath.prefKP_std)
                 
             else:
-                logger.warning('%s folder already exists (skipped)'% os.path.basename(folderKP))
+                logger.error('%s folder already full (skipped)'% os.path.basename(objPath.prefKP))
             
             if iProc <= lstProcLvl.index('kp'): continue
 
-            #---------------------------------------------------------------
-            # EO adjustment
-            #---------------------------------------------------------------
-            if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefEO, kp='none'):
-                logger.info('# EO adjustment')
-                ASfMFunc.KpCsv2Gcp(objPath.prefKP+'-cnet.csv', 
-                                    objPath.prefEO, 
-                                    accuXY=10, 
-                                    accuZ=10, 
-                                    accuI=0.5)
+            #=======================================================================
+            # RPC-BA
+            #-----------------------------------------------------------------------
+            if args.m=='rpc':
+                logger.warning('RPC-BA mode')
+                #---------------------------------------------------------------
+                # RPC adjust EO
+                #---------------------------------------------------------------
+                if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefEO):
+                    logger.info('# RPC adjust EO')
+                    asp.bundle_adjust(subArgs.Adjust_RPC(objPath.prefKP, objPath.prefEO))
+                    ASfMFunc.KpCsv2Geojson(objPath.prefEO)
+
+                    procBar=ProcessStdout(name='EO RPC creation',inputCur=nbFeat)
+                    for j in range(nbFeat):
+                        procBar.ViewBar(j)
+                        featCur=objBlocks.lstBFeat[iB][j]
+                        idImg=featCur['id']
+                        pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
+                        pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
+                        pathRpcOut=objPath.prefEO+'-'+objPath.extRpc1Bx.format(idImg)
+
+                        asp.cam2rpc(ASfMFunc.SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, objPath.pDem, pathRpcOut, prefBA=objPath.prefEO))
+
+                if iProc <= lstProcLvl.index('eo'): continue
+
+                #---------------------------------------------------------------
+                # RPC adjust IO
+                #---------------------------------------------------------------
+                if not ASfMFunc.CopyPrevBA(objPath.prefEO, objPath.prefIO):
+                    logger.info('# RPC adjust IO')
+                    subArgs.ImageAdjust_RPC(objPath.prefEO, objPath.prefIO, objPath, outGraph=False)
+
+                if iProc <= lstProcLvl.index('io'): continue
+
+                #---------------------------------------------------------------
+                # Export model
+                #---------------------------------------------------------------
+                logger.info('# RPC export')
+                lstIn=glob(objPath.prefIO+objPath.extRpc1B.format('*'))
+                if not objPath.pProcData.endswith('/'):
+                    prefOut=objPath.pProcData+'/'
+                else:
+                    prefOut=objPath.pProcData
                 
-                asp.bundle_adjust(subArgs.EO(objPath.prefKP, objPath.prefEO))
-                ASfMFunc.KpCsv2Geojson(objPath.prefEO)
-            
-                if args.ortho:
-                    [asp.mapproject(ASfMFunc.SubArgs_Ortho('EO', objPath, objBlocks.lstBFeat[iB][j], objPath.prefEO, args.epsg)) for j in range(nbFeat)]
+                procBar=ProcessStdout(name='RPC export',inputCur=len(lstIn))
+                for j in range(len(lstIn)):
+                    procBar.ViewBar(j)
+                    pathOut=lstIn[j].replace(objPath.prefIO+'-', prefOut)
+                    cmd='cp %s %s'% (lstIn[j], pathOut)
+                    os.system(cmd)
+                
+                if iProc <= lstProcLvl.index('exp'): continue
 
-                ###### stsKP
-                ASfMFunc.CopyPrevBA(objPath.prefKP_std, objPath.prefEO_std, kp='none')
-                ASfMFunc.KpCsv2Gcp(objPath.prefKP_std+'-cnet.csv', 
-                                    objPath.prefEO_std, 
-                                    accuXY=10, 
-                                    accuZ=10, 
-                                    accuI=0.5)
-                asp.bundle_adjust(subArgs.EO(objPath.prefKP_std, objPath.prefEO_std))
-                ASfMFunc.KpCsv2Geojson(objPath.prefEO_std)
-            
-                if args.ortho:
-                    [asp.mapproject(ASfMFunc.SubArgs_Ortho('EO_std', objPath, objBlocks.lstBFeat[iB][j], objPath.prefEO_std, args.epsg)) for j in range(nbFeat)]
+            #=======================================================================
+            # PM-BA
+            #-----------------------------------------------------------------------
+            elif args.m=='pm':
+                logger.warning('PM-BA mode')
+                #---------------------------------------------------------------
+                # Camera creation
+                #---------------------------------------------------------------
+                logger.info('# Camera creation')
+                procBar=ProcessStdout(name='Scene and camera creation',inputCur=nbFeat)
+                for j in range(nbFeat):
+                    procBar.ViewBar(j)
+                    featCur=objBlocks.lstBFeat[iB][j]
+                    idImg=featCur['id']
+                    pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
+                    pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
+                    pathCamOut=os.path.join(objPath.pProcData, objPath.nTsai[1].format(idImg))
 
+                    # Point grid
+                    if not os.path.exists(pathCamOut): 
+                        asp.cam_gen(ASfMFunc.SubArgs_Camgen(pathImgIn, pathRpcIn, objPath.pDem, pathCamOut, pattern='grid'))
+                        os.remove(pathCamOut)
+                    
+                    # RPC 2 PM rough
+                    pathCamIn=os.path.join(objPath.pProcData, objPath.nTsai[0].format(idImg))
+                    if not os.path.exists(pathCamOut): asp.cam_gen(ASfMFunc.SubArgs_Camgen(pathImgIn, pathRpcIn, objPath.pDem, pathCamIn))
 
-            if iProc <= lstProcLvl.index('eo'): continue
+                    # Adjust PM rough 2 init
+                    if not os.path.exists(pathCamOut): ASfMFunc.AjustPM(idImg, pathRpcIn, pathCamIn, pathCamOut, outGraph=True)
+                
+                    # Ortho
+                    pathOrthoOut=objPath.pOrtho.format(idImg, 'InitCam')
+                    if not os.path.exists(pathOrthoOut):
+                        subArgs=[objPath.pDem,
+                                pathImgIn,
+                                pathCamOut,
+                                pathImgIn.replace('.', 'ortho.'),
+                                '--t_srs', 'EPSG:'+str(args.epsg), 
+                                '-t', 'pinhole',
+                                '--tr', str(gsdOrth),
+                                '--ot', 'UInt16',
+                                ]
+                        asp.mapproject(subArgs)
+
+                sys.exit()
+                #---------------------------------------------------------------
+                # EO adjustment
+                #---------------------------------------------------------------
+                if not ASfMFunc.CopyPrevBA(objPath.prefKP, objPath.prefEO):
+                    logger.info('# RPC adjust EO')
+                    asp.bundle_adjust(subArgs.Adjust_RPC(objPath.prefKP, objPath.prefEO))
+                    ASfMFunc.KpCsv2Geojson(objPath.prefEO)
+                    
+                    procBar=ProcessStdout(name='EO ortho',inputCur=nbFeat)
+                    for j in range(nbFeat):
+                        procBar.ViewBar(j)
+                        featCur=objBlocks.lstBFeat[iB][j]
+                        idImg=featCur['id']
+                        pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
+                        pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
+                        pathCamOut=os.path.join(objPath.pProcData, objPath.nTsai[1].format(idImg))
+
+                        # Ortho
+                        subArgs=[objPath.pDem,
+                                pathImgIn,
+                                pathCamOut,
+                                pathImgIn.replace('.', 'ortho.'),
+                                '--t_srs', 'EPSG:'+str(args.epsg), 
+                                '-t', 'pinhole',
+                                '--tr', str(gsdOrth),
+                                '--ot', 'UInt16',
+                                ]
+                        asp.mapproject(subArgs)
+                    
+                if iProc <= lstProcLvl.index('eo'): continue
+
+###########################################################################
 
             #---------------------------------------------------------------
             # IO adjustment
@@ -301,4 +352,39 @@ if __name__ == "__main__":
     except RuntimeError as msg:
         logger.critical(msg)
 
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
+        print()
+        logger = SetupLogger(name=__title__)
+        #---------------------------------------------------------------
+        # Retrieval of arguments
+        #---------------------------------------------------------------
+        parser.add_argument('-i', required=True, help='Working directory')
+        parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
+
+        parser.add_argument('-m', default='rpc', help='BA mode RPC|PM (default: RPC)')
+        # Process level
+        #   read: ReadBlock
+        #   cam: CamCreat
+        #   ctrl: CtrlCam
+        #   orb: OrbitVis
+        #   kp: BA-KP
+        #   eo:BA-EO
+        #   io: BA-IO,
+        #   exp:Export
+        parser.add_argument('-p', default='exp', help='Process last step- read: ReadBlock, cam: CamCreat, ctrl: CtrlCam, orb: OrbitVis, kp: BA-KP, eo:BA-EO, io: BA-IO, exp:Export (default: exp)')
+
+        # Optional arguments
+        parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
+        parser.add_argument('-ortho',action='store_true', help='Compute orthophoto from initial and final parameters (default: False)')
+        parser.add_argument('-epsg', default='32611', help='Current ESPG used by initial ortho (default: 32611)')
+
+        argsMain = parser.parse_args()
+        
+        Main(argsMain)
+
+        print('\nEND, Continue with dense matching')
+        
 
