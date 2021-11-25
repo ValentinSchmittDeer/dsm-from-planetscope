@@ -5,9 +5,11 @@ import os, sys, time
 import json, csv
 import logging
 from glob import glob
-from math import sin, cos, asin, acos, pi, ceil
+from math import sin, cos, asin, acos, tan, atan2, pi, ceil
 import numpy as np
-from numpy.linalg import norm, inv, lstsq, det, svd, matrix_rank
+from numpy.linalg import norm, inv, lstsq, det, svd, matrix_rank, qr
+from scipy.linalg import expm
+from scipy.optimize import least_squares
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 import rasterio
@@ -28,6 +30,7 @@ else:
 from OutLib.LoggerFunc import *
 from VarCur import *
 from BlockProc import GeomFunc
+from PCT import pipelDFunc
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -50,24 +53,54 @@ def SingleBandImg(pathIn, pathOut, imgType='green'):
 
     pathIn (str): input path
     pathOut (str): output path
-    imgType ('green'|'hls'): extraction mode (default: green)
+    imgType ('green'|'hsv'): extraction mode (default: green)
     out:
         process output
     '''
-    if not imgType in ('green','hls'): SubLogger('CRITICAL', 'Unknown imgType')
     if imgType=='green':
         cmd='gdal_translate -b 2 -of GTiff -co PROFILE=BASELINE -q %s %s'% (pathIn, pathOut)
-        cmd+=' ; rm %s/*.RPB'% os.path.dirname(pathOut)
+        cmd+=' ; rm {0}/*.RPB ; rm {0}/*.tif.aux.xml'.format(os.path.dirname(pathOut))
         return os.system(cmd)
-    else:
-        SubLogger('CRITICAL', '"hls" imgType is not ready')
+    elif imgType=='hsv':
+        img = cv.imread(pathIn, cv.IMREAD_LOAD_GDAL+(-1)) # equivalent to 'cv.IMREAD_ANYDEPTH + cv.IMREAD_COLOR'
+        
+        # Overal normalisation (max normalisation avoid float32 crop)
+        imgMax=np.amax(img)
+        img_n=(img/imgMax).astype(np.float32)
+        
+        imgHSV_n = cv.cvtColor(img_n, cv.COLOR_BGR2HSV)
+        if 1: # Back scaling
+            imgHSV=np.append(imgHSV_n[:,:,[0]], imgHSV_n[:,:,1:]*imgMax, axis=2).astype(np.uint16)
+        else: # Full range stretching
+            imgHSV=np.append(imgHSV_n[:,:,[0]], imgHSV_n[:,:,1:]*65535, axis=2).astype(np.uint16)
+        
+        # Img[hue, saturation, value]
+        cv.imwrite(pathOut, imgHSV[:,:,-1])
 
-def SubArgs_Ortho(pathImgIn, pathRpcIn, pathDemIn, pathOrthoOut, epsg=4326):
+    elif imgType=='hls':
+        img = cv.imread(pathIn, cv.IMREAD_LOAD_GDAL+(-1)) # equivalent to 'cv.IMREAD_ANYDEPTH + cv.IMREAD_COLOR'
+        
+        # Overal normalisation (max normalisation avoid float32 crop)
+        imgMax=np.amax(img)
+        img_n=(img/imgMax).astype(np.float32)
+        
+        imgHLS_n = cv.cvtColor(img_n, cv.COLOR_BGR2HLS)
+        if 1: # Back scaling
+            imgHLS=np.append(imgHLS_n[:,:,[0]], imgHLS_n[:,:,1:]*imgMax, axis=2).astype(np.uint16)
+        else: # Full range stretching
+            imgHLS=np.append(imgHLS_n[:,:,[0]], imgHLS_n[:,:,1:]*65535, axis=2).astype(np.uint16)
+        
+        # Img[hue, lightness, saturation]
+        cv.imwrite(pathOut, imgHLS[:,:,1])
+    else:
+        SubLogger('CRITICAL', 'Unknown imgType: %s'% imgType)
+        
+def SubArgs_Ortho(pathImgIn, pathModIn, pathDemIn, pathOrthoOut, epsg=4326):
     '''
     Create a list of mapproject parameters
     
     pathImgIn (str): input image
-    pathRpcIn (str): input RPC
+    pathModIn (str): input location model
     pathDemIn (str): input DEM
     pathOrthoOut (str): Output ortho
     epsg (int): epsg code of the projected ortho (default: 4326)
@@ -79,60 +112,104 @@ def SubArgs_Ortho(pathImgIn, pathRpcIn, pathDemIn, pathOrthoOut, epsg=4326):
     if not os.path.exists(dirOut): os.mkdir(dirOut)
 
     # Copy model
-    pathRpcTemp=pathImgIn[:-4]+'_RPC.TXT'
-    os.system('cp %s %s'% (pathRpcIn, pathRpcTemp))
+    if pathModIn.endswith('_RPC.TXT'):
+        pathModComput=pathImgIn[:-4]+'_RPC.TXT'
+        os.system('cp %s %s'% (pathModIn, pathModComput))
+        typeCur='rpc'
+    elif pathModIn.endswith('.tsai'):
+        pathModComput=pathModIn
+        typeCur='nadirpinhole'
 
     # Arguments
     subArgs=[pathDemIn,
             pathImgIn,
-            #pathRpcTemp,
+            pathModComput,
             pathOrthoOut,
             '--t_srs', 'EPSG:'+str(epsg), 
-            '-t', 'rpc',
+            '-t', typeCur,
             '--tr', str(gsdOrth),
             '--ot', 'UInt16',
             ]
 
-    subArgs+=['; rm', pathRpcTemp] # remove RPC file after
+    # Delete RPC file after
+    if pathModIn.endswith('_RPC.TXT'): subArgs+=['; rm', pathModComput] 
 
     return subArgs
 
-def SubArgs_StereoKP_RPC(pathObj, lstSceneID, softness=0):
+def MaskStereo(pathObj, sceneId, geomIn):
+    '''
+    Create image with only stereo part visible
+    '''
+    # Path In
+    pathImgIn=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(sceneId))
+    if not os.path.exists(pathImgIn): SubLogger('CRITICAL', 'Image not found: %s'% sceneId)
+    pathRpcIn=os.path.join(pathObj.pData, pathObj.extRpc.format(sceneId))
+    if not os.path.exists(pathRpcIn): SubLogger('CRITICAL', 'Rpc not found: %s'% sceneId)
+
+    # Path Out
+    pathImgOut=os.path.join(pathObj.pProcData, pathObj.extFeatKP.format(sceneId))
+    pathRpcOut=os.path.join(pathObj.pProcData, pathObj.extRpcKP.format(sceneId))
+
+    # Read DTM
+    demIn=rasterio.open(pathObj.pDem)
+    demHei=demIn.read(1)
+    lstCoordsGeo=[]
+    for i, coordCur in enumerate(geomIn['coordinates'][0]):
+        heiCur=demHei[demIn.index(coordCur[0], coordCur[1])]
+        lstCoordsGeo.append(coordCur+[heiCur])
+
+    del demHei
+    demIn.close()
+    matCoordsGeo=np.array(lstCoordsGeo)
+    
+    # Convert to image coords
+    objRpc=GeomFunc.RPCin(pathRpcIn)
+    matCoordsImg=objRpc.Obj2Img(matCoordsGeo)
+    # xMin, yMin, xMax, yMax
+    matBounds=np.clip(np.append(np.amin(matCoordsImg, axis=0), 
+                                np.amax(matCoordsImg, axis=0)).astype(int)+np.array([-1,-1,1,1]), 0, None)
+    
+    # Image creation
+    img = cv.imread(pathImgIn, cv.IMREAD_LOAD_GDAL)
+    mask=np.zeros(img.shape, dtype=np.uint16)
+    mask[matBounds[1]:matBounds[3], matBounds[0]:matBounds[2]]=1
+
+    cv.imwrite(pathImgOut, img*mask)
+
+    # RPC creation
+    cmd='cp %s %s'% (pathRpcIn, pathRpcOut)
+    os.system(cmd)
+
+    return (pathImgOut, pathRpcOut)
+
+def SubArgs_StereoKP_RPC(pathObj, lstPath, softness=0):
     '''
     Create a list of stereo_pprc parameters for key point extraction per pair
 
     pathObj (obj): PathCur class from VarCur
-    lstSceneID (list): list of scene ID
+    lstPath ([(ImgPath, RpcPath), (ImgPath, RpcPath)]): list of path after mask
     softness (int [0-2]): interger designing feature filtering parameter set hardness, 0:hard 2:soft (release freedom)
     out:
         subArgs (list): argument list
     '''
-    # Feature matching hardness
-    # (ip-per-tile, ip-uniqueness-threshold, epipolar-threshold, disable-tri-ip-filter)
-    lstHard=(('1000', '0.3', '2', '0'), # Hard
-             ('1000', '0.4', '5', '0'), 
-             ('1000', '0.3', '5', '1'), # Soft
-             )
+    # Softness parameters
+    # 0: ip-uniqueness-threshold
+    # 1: epipolar-threshold
+    # 2: disable-tri-ip-filter
     
-    if not -1<softness<len(lstHard): SubLogger('CRITICAL', 'Feature extraction and matching hardness out of range, not enough features (key points)')
+    lstSoft=(('0.4', '2', '0'), # Hard
+             ('0.7', '5', '0'), 
+             ('0.6', '3', '1'),
+             ('0.7', '3', '1'), # Soft
+             )[softness]
 
+    subArgs=[imgPath for imgPath, rpcPath in lstPath]
+    
     dirOut=os.path.dirname(pathObj.prefStereoKP)
-    if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
     
-    subArgs=[]
-
-    for idCur in sorted(lstSceneID):
-        pathImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idCur))
-        if not os.path.exists(pathImg): SubLogger('CRITICAL', 'Image not found: %s'% idCur)
-        subArgs.append(pathImg)
-        pathRpcIn=os.path.join(pathObj.pData, pathObj.extRpc.format(idCur))
-        if not os.path.exists(pathRpcIn): SubLogger('CRITICAL', 'Rpc not found: %s'% idCur)
-        pathRpcTemp=os.path.join(pathObj.pProcData, pathObj.extRpc1B.format(idCur))
-        cmd='cp %s %s'% (pathRpcIn, pathRpcTemp)
-        os.system(cmd)
-
+    if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
     subArgs.append(pathObj.prefStereoKP)
-
+    
     # Arguments
     subArgs+=[## Basics
                 '-t', 'rpc', # set stereo session pinhole OR nadirpinhole
@@ -144,27 +221,27 @@ def SubArgs_StereoKP_RPC(pathObj, lstSceneID, softness=0):
                 ## Feature extraction
                 '--alignment-method', 'affineepipolar', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
                 '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--ip-per-tile', lstHard[softness][0], # key point number per sub frame
-                #'--individually-normalize', # normalisation param per image not global
+                #'--ip-per-tile', '1000', # key point number per sub frame
+                '--individually-normalize', # normalisation param per image not global
                 ## Feature matching
                 #'--ip-inlier-factor', '1e-4', # key point creation filtering (x>1/15 -> more points but worse)
-                '--ip-uniqueness-threshold', lstHard[softness][1], # key point creation filtering (x>0.7 -> more points but less unique)
-                '--epipolar-threshold', lstHard[softness][2], # key point matching, Max distance to the epipolar line in camera unit
+                '--ip-uniqueness-threshold', lstSoft[0], # key point creation filtering (x>0.7 -> more points but less unique)
+                '--epipolar-threshold', lstSoft[1], # key point matching, Max distance to the epipolar line in camera unit
                 ## Feature filtering
                 '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration
-                '--disable-tri-ip-filter', lstHard[softness][3], # disable the triangulation filtering
+                '--disable-tri-ip-filter', lstSoft[2], # disable the triangulation filtering
                 #'--ip-triangulation-max-error', '1000', # filter out key point based on triangulation
                 #'--stddev-mask-thresh', '0.01', # mask (filter) key point whether the local standard deviation is less
                 #'--stddev-mask-kernel', '51', # size of the local standard deviation computation
                 ##
                 #'--num-matches-from-disparity', '100', # create key point grid after disparity computation (needs full stereo process)
-                '--num-matches-from-disp-triplets', '1000', # same linking multiview points
+                '--num-matches-from-disp-triplets', '500', # same linking multiview points
                 #'--min-triangulation-angle', '0.01'
                 '--filter-mode', '0', # Avoid filtering: spare time
+                #'--stop-point', '2', # Stop the stereo pipeline 
                 ]
-
-    subArgs+=['; rm', pathRpcTemp] # remove RPC file after
-
+    if softness==3: subArgs+= ['--ip-per-tile', '1000'] # key point number per sub frame
+    
     return subArgs
 
 def SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, pathDemIn, pathRpcOut, prefBA=None):
@@ -214,7 +291,7 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
     ptRadiusFact=15
     if not pattern in ('circle', 'grid'): SubLogger('CRITICAL', 'grid argument must be circle|grid')
     
-    pathGcp=pathCamOut.split('.')[0]+'.gcp'
+    #pathGcp=pathCamOut.split('.')[0]+'.gcp'
 
     # Copy model
     pathRpcTemp=pathImgIn[:-4]+'_RPC.TXT'
@@ -226,15 +303,21 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
     imgShape=(int(strSize[1]), int(strSize[0]))
 
     if imgShape[0]==2134:
-        heightPxlPts=(-8, 4392+1)
+        heiOffset=-8
     elif imgShape[0]==2126:
-        heightPxlPts=(-22, 4378+1)
+        heiOffset=-22
+    elif imgShape[0]==2136:
+        heiOffset=-22
+    elif imgShape[0]==2118:
+        heiOffset=-8
     else:
         SubLogger('CRITICAL', 'Unknown scene height (%i): %s'% (imgShape[0], os.path.basename(pathImgIn)))
     
+
     # Circle grid
     if pattern=='circle':
-        x0,y0=[int(i/camPitch) for i in camCentre]
+        x0=camCentre[0]//camPitch
+        y0=camCentre[1]//camPitch+heiOffset
         lstPxlPts=[(x0,y0),]
         for rCur in range(ptSpace,ptRadiusFact*ptSpace+1, ptSpace):
             lstPxlPts.append((x0+rCur, y0))
@@ -242,7 +325,7 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
             lstPxlPts+=[(x0+int(rCur*cos(alpha)), y0+int(rCur*sin(alpha))) for alpha in np.arange(dAlpha, 2*pi, dAlpha)]
     # Grid  
     else:
-        lstPxlPts=[(wi, hei) for wi in range(0, 6600+1, ptSpace) for hei in range(heightPxlPts[0],heightPxlPts[1]+1,ptSpace)]
+        lstPxlPts=[(wi, hei) for wi in np.linspace(0, 6600, num=11) for hei in np.linspace(0+heiOffset, 4400+heiOffset, num=11)]
     
     strPxlPts=','.join(['%i %i'% (i,j) for i,j in lstPxlPts])
     
@@ -258,7 +341,7 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
             '--pixel-values', '{!r}'.format(strPxlPts), 
             '-o', pathCamOut,
             '--refine-camera',
-            '--gcp-file', pathGcp,
+            #'--gcp-file', pathGcp,
             ]
 
     subArgs+=['; rm', pathRpcTemp] # remove RPC file after
@@ -296,153 +379,137 @@ def StereoDescriptor(pathObj, lstPairs):
                     fileOut.writelines(lstOut)
     return 0
 
-def AjustPM(sceneId, pathRpcIn, pathCamIn, pathCamOut, outGraph=False):
+def RPCwithoutDisto(sceneId, pathRpcIn, pathRpcOut):
     '''
-    Adjust physical model using distortion model (e.g. Rough to Initial).
-
-    ##
-    Compute a distortion model from gcp files (Grid & Rough). The Rough file
-    was used during the RPC 2 PM transformation (should be a circle) and 
-    the Grid file provides ground coordinates used to fit the distortion model. 
-        _h stands for homogeneous coordinates
-        _n stands for normalized [mm]
-
-    pathObj (obj): PathCur clas from VarCur
-    featCur (json): current feature desciptor
-    distModel ('photometrix'|'tsai'|'drpc'): choose distortion model (default: photometrix)
-    outGraph (bool): Plot a distortion graph in image space and stop the process (default: False)
+    Create RPC without distortion in. It makes uses of Tsai object to undistort
+    points.
+    
+    sceneId (str): scene ID text
+    pathRpcIn (str): RPC path
+    pathRpcOut (str): path corrected RPC 
     out:
-        0 (int): write gcp2disto file (process log) and new camera file
+        0 (int)
     '''
-    print()
-    if not type(outGraph)==bool: SubLogger('CRITICAL', 'outGraph must be a boolean')
-
-    # Input gcp
-    pathGcp=pathCamOut.split('.')[0]+'.gcp'
-    if not os.path.exists(pathGcp): SubLogger('CRITICAL', 'Gcp file not found, %s'% pathGcp)
-    with open(pathGcp) as fileIn:
-        lstIn=[l.strip().split() for l in fileIn.readlines()]
-    matPtsGeo=np.array([(float(l[2]), float(l[1]), float(l[3])) for l in lstIn])
-    matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
-    nbPts=matPtsGeo.shape[0]
-
     # Create objects
     objRpcIn=GeomFunc.RPCin(pathRpcIn)
-    objCamIn=GeomFunc.TSAIin(pathCamIn)
     
-    matPtsImg=objRpcIn.Obj2Img(matPtsGeo)
+    emptyCam={'fu': camFocal,
+              'fv': camFocal,
+              'cu': camCentre[0],
+              'cv': camCentre[1],
+              'pitch': camPitch,
+              'distoType': 'NULL'}
+    objCam=GeomFunc.TSAIin(emptyCam)
+
+    # Update distortion model
+    hardwId=sceneId.split('_')[-1]
+    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'photometrix'):
+        setattr(objCam, keyNew, valNew)
+    
+    # Point pairs
+    # grid from image
+    meshRange=np.meshgrid(np.linspace(-1.0, 1.0, num=11), # x
+                          np.linspace(-1.0, 1.0, num=11), # y
+                          np.linspace(-0.2, 0.2, num=11)) # H
+    matPtsImg_d=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T*objRpcIn.Scale(d=2)+objRpcIn.Offset(d=2)
+    matPtsH=meshRange[2].reshape(-1,1)*objRpcIn.heiScale+objRpcIn.heiOffset
+    objRpcIn.Comput_InvRPC()
+    matPtsGeo=objRpcIn.Img2Obj_Z(matPtsImg_d,matPtsH)
+    matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
+    nbPts=matPtsCart.shape[0]
+
+    matPtsImg_u=objCam.ApplyDisto('remove', matPtsImg_d)
+
+    objRpcIn.Comput_RPC(matPtsGeo, matPtsImg_u)
+    
+    with open(pathRpcOut, 'w') as fileOut:
+        fileOut.writelines(objRpcIn.__write__())
+
+    return 0
+
+def ConvertPM(sceneId, pathCamIn, pathCamOut):
+    '''
+    Include the right distortin model in a given PM.
+    
+    sceneId (str): scene ID text
+    pathCamIn (str): input camera path
+    pathCamOut (str): ouput camera path
+    out:
+        0 (int)
+    ''' 
     objCamOut=GeomFunc.TSAIin(pathCamIn)
-
-    # Extract distortion model
-    if 0:
-        if not checkPlanetCommon: SubLogger('CRITICAL', 'must run in planet_common env')
-        from planet_common.maths import camera
-        from planet_common.calibration.optical_distortion.configs import psblue, ps2
-        hardwId=sceneId.split('_')[-1]
-
-        if hardwId in ps2.PER_SAT_CONFIG:
-            dicConfig=dict(ps2.PER_SAT_CONFIG[hardwId].copy())
-            dicConfig['telescope']='PS2'
-            dicConfig['distoCentre']=dicConfig['center']
-            dicConfig['frameCentre']={'x': ps2.CAMERA_CENTER_X, 'y': ps2.CAMERA_CENTER_Y}
-            dicConfig['frameSize']={'x': camera.PS2_CAMERA.width, 'y': camera.PS2_CAMERA.height}
-
-        elif hardwId in psblue.PER_SAT_CONFIG:
-            dicConfig=dict(ps2.PER_SAT_CONFIG[hardwId].copy())
-            dicConfig['telescope']='PSBlue'
-            dicConfig['distoCentre']=dicConfig['center'].copy()
-            dicConfig['frameCentre']={'x': psblue.CAMERA_CENTER_X,'y': psblue.CAMERA_CENTER_Y}
-            dicConfig['frameSize']={'x': camera.IMPERX47MP_CAMERA.width,'y': camera.IMPERX47MP_CAMERA.height}
-
-        else:
-            SubLogger('CRITICAL', 'config info not found for hardware id: %s'% hardwId)
-        del dicConfig['center']
-
-    else:
-        dicConfig={'rem': {'k1': 4.00255009e-10, 'k2': 0.0}, 
-                   'distoCentre': {'x': 3329.87738, 'y': 2188.70904}, 
-                   'add': {'k1': -3.94502713e-10, 'k2': 0.0}, 
-                   'frameSize': {'x': 6600, 'y': 4400}, 
-                   'telescope': 'PS2', 
-                   'chroma': 'mono', 
-                   'frameCentre': {'x': 3300.0, 'y': 2200.0}, 
-                   'format': 'opencv'}
     
-    # Update distortion file
-    distKind=1 # 0=Photometrix, 1=Tsai
-    tupUpdate=( (   ('distoType', 'Photometrix'), # Photometrix, remove distortion in mm
-                    ('xp', (dicConfig['frameCentre']['x']-dicConfig['distoCentre']['x'])*objCamOut.pitch),
-                    ('yp', (dicConfig['frameCentre']['y']-dicConfig['distoCentre']['y'])*objCamOut.pitch),
-                    ('k1', dicConfig['add']['k1']/objCamOut.pitch**2),
-                    ('k2', dicConfig['add']['k2']/objCamOut.pitch**4),
-                    ('k3', 0.0),
-                    ('p1', 0.0),
-                    ('p2', 0.0),
-                    ('b1', 0.0),
-                    ('b2', 0.0),
-                ),
-                (   ('distoType', 'TSAI'), # Tsai model, add distortion in normalised coords
-                    ('k1', dicConfig['rem']['k1']*objCamOut.fu**2/objCamOut.pitch**2),
-                    ('k2', dicConfig['rem']['k2']*objCamOut.fu**4/objCamOut.pitch**4),
-                    ('p1', 0.0),
-                    ('p2', 0.0),
-                )
-            )[distKind]
-
-    for keyNew, valNew in tupUpdate:
+    hardwId=sceneId.split('_')[-1]
+    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'tsai'):
         setattr(objCamOut, keyNew, valNew)
-    objCamOut.Update()
-
-    with open(pathCamOut, 'w') as fileOut:
-        fileOut.writelines(objCamOut.__write__())
-
-    return 0
-
-    # Update extrinsic
-    # matPtsImg, objCamOut, matPtsCart
-    pt0=np.append(matPtsCart, np.ones([nbPts, 1]), axis=1)
-    print('pt0\n', pt0[:5])
-    matO=np.append(objCamOut.matO, [[0, 0, 0, 1]], axis=0)
-    #matO=objCamOut.matO
-    #print('matO\n', matO)
-    pt1=(matO@pt0.T).T
-    print('pt1\n', pt1[:5])
-    matK=np.append(objCamOut.matK, [[0], [0], [0]], axis=1)
-    #matK=objCamOut.matK
-    #print('matK\n', matK)
-    pt2_h=(matK@pt1.T).T
-    pt2=pt2_h[:,:2]/pt2_h[:,[2]]
-    print('pt2\n', pt2[:5])
-    pt3=objCamOut.ApplyDisto('add', pt2)
-    print('pt3\n', pt3[:5])
-    print('ptImg\n', matPtsImg[:5])
-    ###### Caution pt3=matPtsImg
-    ptImg_n=pt3-objCamOut.vectPP/objCamOut.pitch
-    rad_n=norm(ptImg_n, axis=1)[:,np.newaxis]
-    pt12=pt3+ptImg_n*(dicConfig['add']['k1']*rad_n**2+dicConfig['add']['k2']*rad_n**4) # in pixel
-    print('pt12\n', pt12[:5])
-    matKinv=matK.T@inv(matK@matK.T)
-    #print('matK inv\n', matKinv)
-    pt11=(matKinv@np.append(pt12, np.ones([nbPts, 1]), axis=1).T).T
-    print('pt11\n', pt11[:5])
-    pt10=(inv(matO)@pt11.T).T
-    print('pt10\n', pt10[:5])
-    for i in range(5):
-        ptInf=pt10[i,:3]
-        matSkew=np.array([[0, -ptInf[2], ptInf[1]], [ptInf[2], 0, -ptInf[0]], [-ptInf[1], ptInf[0], 0]])
-        vect=matSkew@objCamOut.vectX0
-        pt3D=pt0[i,:3]
-        print('Cross prod', np.sum((-vect*pt3D)[:2])/vect[2])
-        print('Pt inf', np.sum((-pt10[i,:]*pt0[i,:])[[0,1,3]])/pt0[i,2])
-        print(pt3D[2])
+    objCamOut.UpdateTsai()
     
-
-    sys.exit()
     with open(pathCamOut, 'w') as fileOut:
         fileOut.writelines(objCamOut.__write__())
 
     return 0
 
+def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
+    '''
+    Run a spatial resection approximating the input RPC.
+    It is based on solvePnP function from OpenCV.
+
+    sceneId (str): scene ID text
+    pathRpcIn (str): RPC path
+    pathCamOut (str): ouput camera path
+    out:
+        0 (int)
+    '''
+    # Create objects
+    objRpcIn=GeomFunc.RPCin(pathRpcIn)
+    objRpcIn.Comput_InvRPC()
+
+    emptyCam={'fu': camFocal,
+              'fv': camFocal,
+              'cu': camCentre[0],
+              'cv': camCentre[1],
+              'pitch': camPitch,
+              'distoType': 'NULL'}
+    objCamOut=GeomFunc.TSAIin(emptyCam)
+
+    # Update distortion model
+    hardwId=sceneId.split('_')[-1]
+    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'tsai'):
+        setattr(objCamOut, keyNew, valNew)
+    
+    setattr(objCamOut, 'matK', np.array([[objCamOut.fu, 0           , objCamOut.cu   ],
+                                         [0           , objCamOut.fv, objCamOut.cv   ],
+                                         [0           , 0           , objCamOut.pitch]])/objCamOut.pitch)
+
+    # Point pairs, # grid from image
+    meshRange=np.meshgrid(np.linspace(-1.0, 1.0, num=11), # x
+                          np.linspace(-1.0, 1.0, num=11), # y
+                          np.linspace(-0.2, 0.2, num=11)) # H
+    matPtsImg_d=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T*objRpcIn.Scale(d=2)+objRpcIn.Offset(d=2)
+    matPtsH=meshRange[2].reshape(-1,1)*objRpcIn.heiScale+objRpcIn.heiOffset
+    objRpcIn.Comput_InvRPC()
+    matPtsGeo=objRpcIn.Img2Obj_Z(matPtsImg_d,matPtsH)
+    matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
+    nbPts=matPtsCart.shape[0]
+
+    matDisto=np.array([objCamOut.k1, objCamOut.k2, 0, 0])
+    checkPnP, vectR, vectT=cv.solvePnP(matPtsCart, matPtsImg_d, objCamOut.matK, matDisto, flags=cv.SOLVEPNP_EPNP)
+    if not checkPnP: SubLogger('CRITICAL', 'PnP (SRS) failed')
+    
+    # Old scipy version on planet_common
+    #from scipy.spatial.transform import Rotation as R
+    #matR=R.from_rotvec(vectR.flatten()).as_matrix()
+    matR=expm(np.cross(np.eye(3), vectR.flatten()))
+    
+    # Update camera
+    setattr(objCamOut, 'R', matR.T.flatten())
+    setattr(objCamOut, 'C', (-matR.T@vectT).flatten())
+    objCamOut.UpdateTsai()
+
+    with open(pathCamOut, 'w') as fileOut:
+        fileOut.writelines(objCamOut.__write__())
+
+    return 0
 
 class SubArgs_BunAdj:
     '''
@@ -474,7 +541,7 @@ class SubArgs_BunAdj:
                 '--num-passes', '1', # iteration number
                 
                 ## Storage
-                '--report-level', '20',
+                #'--report-level', '20',
                 '--save-cnet-as-csv', # Save key points in gcp point format
                 ]
 
@@ -512,7 +579,7 @@ class SubArgs_BunAdj:
         self.zipRPC=tuple(zip(lstRPCPath, lstRPCUse))
 
         # Cameras
-        self.lstTsaiName=[pathObj.nTsai[1].format(pathObj.extFeat1B.format(idCur).split('.')[0]) 
+        self.lstTsaiName=[pathObj.nTsai[1].format(idCur) 
                                 for idCur in lstId]       
 
     def KP_RPC(self, prefIn, prefOut):
@@ -527,8 +594,17 @@ class SubArgs_BunAdj:
         [os.system('cp %s %s'% couple) for couple in self.zipRPC]
 
         args=self.argsInit.copy()
+        
+        # Case of PM-BA with RPC-KP
+        args[args.index('-t')+1]='rpc'
+        try:
+             args.remove('--inline-adjustments')
+        except ValueError:
+            pass
+        
         args+=['-o', prefOut]
         args+=[## Key points
+                '--individually-normalize', # normalisation param per image not global
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
@@ -545,7 +621,7 @@ class SubArgs_BunAdj:
 
         return args
 
-    def Adjust_RPC(self, prefIn, prefOut):
+    def EO_RPC(self, prefIn, prefOut):
         '''
         Adjust RPC and return .adjust file
         '''
@@ -571,7 +647,7 @@ class SubArgs_BunAdj:
 
         return args
 
-    def ImageAdjust_RPC(self, prefIn, prefOut, pathObj, outGraph=False):
+    def IO_RPC(self, prefIn, prefOut, pathObj, outGraph=False):
         '''
         !!! In development !!!
         Compute polynomial transformation in image plane to adjust 
@@ -735,7 +811,84 @@ class SubArgs_BunAdj:
             plt.show()
         
         return 0
-        
+    
+    def EO_PM(self, prefIn, prefOut, pathGCP):
+        '''
+        Parameters solving extrinsic parameters from RPC-GCP
+        '''
+        args=self.argsInit.copy()
+        if os.path.isdir(prefIn):
+            if not prefIn.endswith('/'): prefIn+='/'
+        else:
+            if not prefIn.endswith('-'): prefIn+='-' 
+        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
+        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
+        args+= lstPathTsai
+        if pathGCP: args.append(pathGCP)
+        args+=['-o', prefOut]
+        args+=[## Key points
+                '--force-reuse-match-files', # use former match file: using -o prefix
+                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
+                ## Model
+                #'--heights-from-dem', self.pathDem, # fix key point height from DSM
+                #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
+                #'--rotation-weight', '1', 
+                #'--translation-weight', '0', # EO weight (x>0 -> stiffer) or
+                #'--camera-weight', '100', # EO weight (x>1 -> stiffer)
+                ## Least square
+                '--remove-outliers-params','"80.0 1.0 2.0 3.0"',
+                #'--robust-threshold', '1000', # set cost function threshold
+                #'--max-disp-error', '1', # with ref DSM
+                ## Least square
+                '--max-iterations', '100', # in non-linear least square (per pass)  
+                #'--parameter-tolerance', '1e-7', # least square limit
+                ]
+
+        args[args.index('--num-passes')+1]='2' # iteration number
+        return args
+
+    def IO_PM(self, prefIn, prefOut, pathGCP):
+        '''
+        Parameters solving intrinsic parameters from large extrinsic weight
+        '''
+        args=self.argsInit.copy()
+        if os.path.isdir(prefIn):
+            if not prefIn.endswith('/'): prefIn+='/'
+        else:
+            if not prefIn.endswith('-'): prefIn+='-' 
+        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
+        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
+        args+= lstPathTsai
+        if pathGCP: args.append(pathGCP)
+        args+=['-o', prefOut]
+        args+=[## Key points
+                '--force-reuse-match-files', # use former match file: using -o prefix
+                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
+                ## Model
+                #'--heights-from-dem', self.pathDem, # fix key point height from DSM
+                #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
+                #'--rotation-weight', '1', 
+                #'--translation-weight', '0', # EO weight (x>0 -> stiffer)
+                '--camera-weight', '10', # EO weight (x>1 -> stiffer)
+                ## Intrinsic imporvement
+                '--solve-intrinsics', # include IO in BA (default=False) 
+                '--intrinsics-to-float', '"optical_center"', # "'focal_length optical_center other_intrinsics' ", # list of IO param to solve
+                #'--intrinsics-to-share', '"other_intrinsics"', # "'focal_length optical_center other_intrinsics' ", # list of common IO param
+                #'--reference-terrain', self.pathDem, # use a reference terrain to create points for instrinsic adjust: needs disparities map list
+                #'--disparity-list', 'file name chaine as string', # list of disparity map paths: for reference terrain
+                #'--reference-terrain-weight', '1',
+                ## Least square
+                #'--remove-outliers-params','"80.0 1.0 1.0 2.0"',
+                #'--robust-threshold', '1000', # set cost function threshold
+                #'--max-disp-error', '1', # with ref DSM
+                ## Least square
+                '--max-iterations', '100', # in non-linear least square (per pass)  
+                #'--parameter-tolerance', '1e-7', # least square limit 1e-7
+                ]
+
+        #args[args.index('--num-passes')+1]='2' # iteration number
+        return args
+
     def Fixed(self, prefIn, prefOut):
         SubLogger('CRITICAL', 'Not ready')
 
@@ -782,7 +935,7 @@ def KpCsv2Geojson(prefIn):
     
     return 0
 
-def CopyPrevBA(prefIn, prefOut, existBool=True, img=True, kp='match'):
+def CopyPrevBA(prefIn, prefOut, dirExists=True, img=True, kp='match', dispExists=False):
     '''
     Copy BA files (stats and matches) from a folder to another.
     It is used to propagate bundle adjsutment.
@@ -796,11 +949,14 @@ def CopyPrevBA(prefIn, prefOut, existBool=True, img=True, kp='match'):
     if not kp in ('match', 'clean', 'disp', 'none'): SubLogger('CRITICAL', 'KP copy mode unknown')
     
     dirOut=os.path.dirname(prefOut)
-    if existBool and os.path.exists(dirOut):  
-        SubLogger('ERROR', '%s folder already exists'% os.path.basename(prefOut))
-        return 1
-    elif existBool and not os.path.exists(dirOut):
-        os.mkdir(dirOut)
+    if dirExists:
+        if os.path.exists(dirOut):  
+            SubLogger('ERROR', '%s folder already exists'% os.path.basename(prefOut))
+            return 1
+        else:
+            os.mkdir(dirOut)
+    
+    if dispExists and not os.path.exists(prefIn+'-D.tif'): return 2
 
     # Copy tif
     if img:
@@ -822,496 +978,38 @@ def CopyPrevBA(prefIn, prefOut, existBool=True, img=True, kp='match'):
     
     lstPathIn=glob(prefIn+extIn)
     for pathIn in lstPathIn:
-        pathOut=pathIn.replace(prefIn,prefOut).replace('-disp','').replace('-clean','')
+        pathOut=pathIn.replace(prefIn,prefOut).replace('-disp','').replace('-clean','').replace('_KP', '_1b')
         cmd='cp %s %s'% (pathIn, pathOut)
         os.system(cmd)
     
     return 0
 
-
-##########################################
-
-def SubArgs_ConvertCam(pathObj, featCur):
+def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=0):
     '''
-    Create a list of convert_pinhole_model parameters
+    Reads a cnet.csv file, changes the point accuracy (ECEF Std Dev),
+    saves it to the Ba folder with gcp extention. Useful for BA with 
+    GCP but the function does not read DEM Height, it should be 
+    forced during the previous BA.
+    The ground accuracy in [m] is the same in 3 directions due to ECEF.
+    It can be in [°] and [m] with adjusted version but the BA has to 
+    include --use-lon-lat-height-gcp-error.
+    The point number (per characteristic) select "nbPts" of high points,
+    "nbPts" of East points, ...
+    Characteristics:
+        Lat (+/-)
+        Long (+/-)
+        Height (+/-)
+        Nb obs (+/-)
+    The default nbPts=0 means all points
 
-    prefIn (str): last BA prefix
-    pathObj (obj): PathCur clas from VarCur
-    featCur (json): current feature desciptor
+
+    pathIn (str): input cnet path
+    prefOut (str): output prefix
+    accuXYZ (float): ground accuracy (ECEF Std Dev) [m] (default: 1)
+    accuI (float): image accuracy (x, y) [pxl] (default: 1)
+    nbPts (int): number of point per characteritsic (default: 0)
     out:
-        subArgs (list): argument list
-    '''
-    # Initial files
-    prefix=''.join([os.path.basename(getattr(pathObj,key)) for key in pathObj.__dict__ if key.startswith('pref')])
-    prefix+='-'
-
-    idImg=featCur['id']
-    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
-    if not os.path.exists(pathImg1B): SubLogger('CRITICAL', 'Initial image file not found, %s'% pathImg1B)
-
-    pathTsai1=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
-    if not os.path.exists(pathTsai1): SubLogger('CRITICAL', 'Initial tsai file not found %s'% idImg)
-
-    # New files
-    pathTsai2=pathObj.nTsai[2].format(pathImg1B.split('.')[0])
-    if os.path.exists(pathTsai2): return 1
-    
-    # Arguments
-    subArgs=[ pathImg1B,
-            pathTsai1,
-            '--output-type', 'TsaiLensDistortion', # distortion model
-            # <TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
-            '--sample-spacing', '100', # number of pixel for distortion modeling 
-            '-o', pathTsai2,
-            ]
-    
-    return subArgs
-
-def SubArgs_ExportCam(prefIn, pathObj, featCur):
-    '''
-    Create a list of convert_pinhole_model parameters
-
-    prefIn (str): last BA prefix
-    pathObj (obj): PathCur clas from VarCur
-    featCur (json): current feature desciptor
-    out:
-        subArgs (list): argument list
-    '''
-    # Initial files
-    prefix=''.join([os.path.basename(getattr(pathObj,key)) for key in pathObj.__dict__ if key.startswith('pref')])
-    prefix+='-'
-
-    idImg=featCur['id']
-    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
-    if not os.path.exists(pathImg1B): SubLogger('CRITICAL', 'Initial image file not found, %s'% pathImg1B)
-
-    lstTsai1=glob('{}*{}*{}'.format(prefIn,idImg,'.tsai'))
-    if not len(lstTsai1)==1: SubLogger('CRITICAL', 'Initial tsai file not found (or several), %s'% idImg)
-    pathTsai1=lstTsai1[0]
-
-    # New files
-    nameTsai2=pathObj.nTsai[2].format(pathObj.extFeat1B.format(idImg).split('.')[0])
-    pathTsai2=os.path.join(pathObj.pProcData, nameTsai2)
-    #if os.path.exists(pathTsai2): return 0
-    
-    # Arguments
-    subArgs=[ pathImg1B,
-            pathTsai1,
-            '--output-type', camDistExp, # distortion model
-            # <TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
-            '--sample-spacing', '100', # number of pixel for distortion modeling 
-            '-o', pathTsai2,
-            ]
-    
-    return subArgs
-
-def SubArgs_StereoKP_PM(pathObj, pairCur, softness=0):
-    '''
-    Create a list of stereo_pprc parameters for key point extraction per pair
-
-    pathObj (obj): PathCur class from VarCur
-    featCur (json): current stereo pair desciptor
-    softness (int [0-2]): interger designing feature filtering parameter set hardness, 0:hard 2:soft (release freedom)
-    out:
-        subArgs (list): argument list
-    '''
-    # Feature matching hardness
-    # (ip-per-tile, ip-uniqueness-threshold, epipolar-threshold, disable-tri-ip-filter)
-    lstHard=(('200', '0.2', '3', '1'), # Hard
-             ('200', '0.4', '3', '1'), 
-             ('1000', '0.4', '3', '0'), # Soft
-             )
-    
-    if not -1<softness<len(lstHard): SubLogger('CRITICAL', 'Feature extraction and matching hardness out of range, not enough features (key points)')
-
-    dirOut=os.path.dirname(pathObj.prefStereoKP)
-    if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
-    
-    lstPaths=[[],[]]
-
-    for idCur in sorted(pairCur['properties']['scenes'].split(';')):
-        pathImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idCur))
-        if not os.path.exists(pathImg): SubLogger('CRITICAL', 'Image not found: %s'% idCur)
-        lstPaths[0].append(pathImg)
-
-        pathTsai= pathObj.nTsai[1].format(pathImg.split('.')[0])
-        if not os.path.exists(pathTsai): SubLogger('CRITICAL', 'Tsai not found: %s'% idCur)
-        lstPaths[1].append(pathTsai)
-    
-    subArgs=lstPaths[0]+lstPaths[1]
-    subArgs.append(pathObj.prefStereoKP)
-
-    # Arguments
-    subArgs+=[## Basics
-                '-t', 'nadirpinhole', # set stereo session pinhole OR nadirpinhole
-                '--datum', 'WGS_1984', # set datum
-                '--nodata-value', '0', # nodata, do not process <= x
-                '--skip-rough-homography', # Skip datum-based rough homography
-                '--skip-image-normalization', # 
-                #'--ip-debug-images', '1', # Print image with key points on: written at process root (in docker)
-                ## Feature extraction
-                '--alignment-method', 'affineepipolar', # transformation method affineepipolar|homography|epipolar|none: see "Preparation" in mss_main
-                '--ip-detect-method','1', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--ip-per-tile', lstHard[softness][0], # key point number per sub frame
-                #'--individually-normalize', # normalisation param per image not global
-                ## Feature matching
-                #'--ip-inlier-factor', '1e-4', # key point creation filtering (x>1/15 -> more points but worse)
-                '--ip-uniqueness-threshold', lstHard[softness][1], # key point creation filtering (x>0.7 -> more points but less unique)
-                '--epipolar-threshold', lstHard[softness][2], # key point matching, Max distance to the epipolar line in camera unit
-                ## Feature filtering
-                '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration
-                '--disable-tri-ip-filter', lstHard[softness][3], # disable the triangulation filtering
-                #'--ip-triangulation-max-error', '1000', # filter out key point based on triangulation
-                #'--stddev-mask-thresh', '0.01', # mask (filter) key point whether the local standard deviation is less
-                #'--stddev-mask-kernel', '51', # size of the local standard deviation computation
-                ##
-                #'--num-matches-from-disparity', '100', # create key point grid after disparity computation (needs full stereo process)
-                '--num-matches-from-disp-triplets', '1000', # same linking multiview points
-                #'--min-triangulation-angle', '0.01'
-                '--filter-mode', '0', # Avoid filtering: spare time
-                ]
-
-
-    return subArgs
-
-class SubArgs_BunAdj_old:
-    '''
-    Bundle_adjust parameters
-    '''
-    argsInit=[  ## Basics
-                '-t', 'nadirpinhole', # set stereo session pinhole OR nadirpinhole
-                '--datum', 'WGS_1984', # set datum
-                '--nodata-value', '0', # nodata, do not process <= x
-                #'--input-adjustments-prefix', path # initial camera transform
-                # : read "adjust" files with that prefix
-                # Caution cannot be coupled with --inline-adj (so no distortion)
-                
-                ## Key points
-                '--min-matches', '10', # min key point pairs
-                
-                ## Model: 'Any weight set in the model must balance another one (never a single weight)'
-                '--disable-pinhole-gcp-init', # do initialise camera from GCP files
-
-                ## Intrinsic imporvement
-                
-                ## Least square
-                '--num-passes', '1', # iteration number
-                
-                ## Storage
-                '--report-level', '20',
-                '--save-cnet-as-csv', # Save key points in gcp point format
-                '--inline-adjustments', # Store result in .tsai, not in adjsut
-                ]
-
-    def __init__(self, pathObj, lstId):
-        self.pathDem=pathObj.pDem
-        
-        # Stereo
-        self.argsInit+=['--overlap-list', pathObj.pStereoLst,] # stereopair file for key point extraction
-            #OR
-        #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
-        
-        # Scenes
-        if not type(lstId)==list : SubLogger('CRITICAL', 'Image list (lstId) must be a list of image id')
-        lstId.sort()
-        lstImgPath=[os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idCur)) for idCur in lstId]
-        if False in [os.path.exists(pathCur) for pathCur in lstImgPath]: SubLogger('CRITICAL', 'Image(s) not found' )
-        self.nbScene=len(lstImgPath)
-        self.argsInit+=lstImgPath
-
-        
-        # Cameras
-        self.lstTsaiName=[pathObj.nTsai[1].format(pathObj.extFeat1B.format(idCur).split('.')[0]) 
-                                for idCur in lstId]
-           
-    def KeyPoints(self, prefIn, prefOut):
-        '''
-        Parameters for key point extraction
-        '''
-        strInd=' '.join([str(i) for i in range(self.nbScene)])
-        
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args+=['-o', prefOut]
-        args+=[## Key points
-                '--ip-detect-method','0', # algo (0=OBA-loG, 1=SIFT, 2=ORB)
-                '--ip-per-tile', '100', # key point number
-                '--ip-inlier-factor', '5e-3', # key point creation filtering (x>1/15 -> more points but worse): 
-                '--ip-uniqueness-threshold', '0.1', # key point creation filtering (x>0.7 -> more points but less unique)
-                #'--individually-normalize', # normalisation param per image not global 
-                '--epipolar-threshold', '5', # key point matching, Max distance to the epipolar line in camera unit
-                '--ip-num-ransac-iterations', '1000', # number of RANSAC iteration 
-                '--enable-tri-ip-filter', # filter out key point based on triangulation
-                #'--min-triangulation-angle', '0.2', # filtering min angle [°]: KP fails if bad RPC
-                #'--forced-triangulation-distance', '450e3', # force distance to the camera if not trian fails: useless
-                #'--stop-after-matching', # stop after matching key point: do not provide initial residuals
-                ## Model
-                '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
-                #'--fix-gcp-xyz', # turn GCP to fixed: useless whether fixed-camera-indices in
-                #'--max-disp-error', '10', # ??
-                #'--remove-outliers-params', '"90.0 1.0 0.3 1.0"', # outlier filtering param
-                #'--remove-outliers-by-disparity-params', '70.0 1.5', # outlier filtering param
-                #'--elevation-limit', '0.0 4000.0 ' # outlier filtering param
-                ## Least square
-                '--max-iterations', '10', # in non-linear least square (per pass)
-                #'--parameter-tolerance', '1e-6', # least square limite 
-                ]
-        
-        return args
-
-    def Init(self, prefIn, prefOut):
-        '''
-        Parameters with no freedom and not adjustment
-        '''
-        strInd=' '.join([str(i) for i in range(self.nbScene)])
-
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args+=['-o', prefOut]
-        args+=[## Key points
-                '--force-reuse-match-files', # use former match file: using -o prefix
-                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
-                ## Model
-                '--heights-from-dem', self.pathDem, # fix key point height from DSM
-                '--heights-from-dem-weight', '1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
-                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
-                '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
-                ## Least square
-                '--max-iterations', '1', # in non-linear least square (per pass)
-                ]
-        #args[args.index('--min-matches')+1]='1'
-        
-        return args
-
-    def EO(self, prefIn, prefOut):
-        '''
-        Parameters which involve DEM to solve extrinsic cameras
-        '''
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn):
-            if not prefIn.endswith('/'): prefIn+='/'
-        else:
-            if not prefIn.endswith('-'): prefIn+='-'        
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args.append(prefOut+'*.gcp')
-        args+=['-o', prefOut]
-        args+=[## Key points
-                '--force-reuse-match-files', # use former match file: using -o prefix
-                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
-                #'--heights-from-dem', self.pathDem, # fix key point height from DSM
-                #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
-                #'--reference-terrain', self.pathDem, # When using a reference terrain, must specify a list of disparities.
-                ## Model
-                #'--rotation-weight', '0.01', 
-                #'--translation-weight', '0.1', # EO weight (x>0 -> stiffer)
-                # OR
-                '--camera-weight', '1', # EO weight (x>1 -> stiffer)
-                ## Least square
-                #'--robust-threshold', '1000', # set cost function threshold
-                #'--max-disp-error', '1', # with ref DSM
-                ## Least square
-                '--max-iterations', '200', # in non-linear least square (per pass)  
-                #'--parameter-tolerance', '1e-5', # least square limit 
-                ]
-
-        return args
-
-    def IO(self, prefIn, prefOut):
-        '''
-        Parameters which involve DEM to solve intrinsic cameras
-        '''
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn):
-            if not prefIn.endswith('/'): prefIn+='/'
-        else:
-            if not prefIn.endswith('-'): prefIn+='-'        
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args+=[## Key points
-                '--force-reuse-match-files', # use former match file: using -o prefix
-                '--skip-matching', # skip key points creation part if the no match file found: alternative to --overlap-list
-                '--heights-from-dem', self.pathDem, # fix key point height from DSM
-                '--heights-from-dem-weight', '1', # weight of key point height from DSM
-                ## Model
-                #'--rotation-weight', '0', '--translation-weight', '0', # EO weight (x>0 -> stiffer)
-                # OR
-                '--camera-weight', '2', # EO weight (x>1 -> stiffer)
-                ## Intrinsic imporvement
-                '--solve-intrinsics', # include IO in BA (default=False) 
-                '--intrinsics-to-float', "'focal_length' "# "'focal_length optical_center other_intrinsics' ", # list of IO param to solve
-                #'--intrinsics-to-share', "'focal_length' "# "'focal_length optical_center other_intrinsics' ", # list of common IO param
-                #'--reference-terrain', pathDict['pDem'], # intrinsic imporvement
-                #'--reference-terrain-weight' # weight of the DEM in IO resolution (x>1 -> more impact)
-                ## Least square
-                #'--parameter-tolerance', '1e-2', # least square limite 
-                ]
-        args+=['-o', prefOut]
-        args.remove('--save-cnet-as-csv')
-
-        return args
-
-    def Fix(self, prefIn, prefOut):
-        '''
-        Parameters with no freedom and not adjustment
-        '''
-        strInd=' '.join([str(i) for i in range(self.nbScene)])
-
-        args=self.argsInit.copy()
-        if os.path.isdir(prefIn) and not prefIn.endswith('/'): prefIn+='/'
-        lstPathTsai=[glob(prefIn+'*'+nameCur)[0] for nameCur in self.lstTsaiName if len(glob(prefIn+'*'+nameCur))==1]
-        if not lstPathTsai or not len(lstPathTsai)==self.nbScene: SubLogger('CRITICAL', 'Input cameras not complet')
-        args+= lstPathTsai
-        args+=['-o', prefOut]
-        args+=[## Key points
-                '--force-reuse-match-files', # use former match file: using -o prefix
-                '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
-                ## Model
-                '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
-                ## Least square
-                '--max-iterations', '1', # in non-linear least square (per pass)
-                ]
-        args[args.index('--num-passes')+1]='1'
-        #args[args.index('--min-matches')+1]='1'
-        
-        return args
-
-
-
-
-def Correct_DistoCam(pathObj, featCur):
-    '''
-    Correct camera files by changing 0 to a very small value (distortion only)
-
-    pathObj (obj): PathCur clas from VarCur
-    featCur (json): current feature desciptor
-    out:
-        
-    '''
-    # Initial files
-    idImg=featCur['id']
-    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
-    pathTsai=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
-    if not os.path.exists(pathTsai): SubLogger('ERROR', 'Initial tsai file not found, %s'% pathTsai)
-
-    # Read file
-    with open(pathTsai) as fileIn:
-        txtIn=fileIn.readlines()
-    
-    if not txtIn[12]=='TSAI\n': SubLogger('CRITICAL', 'Function not read for such distortion, please adjust it')
-
-    fileOut=open(pathTsai, 'w')
-    fileOut.writelines(txtIn[:13])
-    for i in range(13,len(txtIn)):
-        lineCur=txtIn[i].split('=')
-        if not len(lineCur)>1: 
-            fileOut.write(txtIn[i])
-            continue
-        
-        if lineCur[-1].strip()=='0': 
-            fileOut.write(txtIn[i].replace('0', '1e-20'))
-        else:
-            fileOut.write(txtIn[i])
-    fileOut.close()
-    
-def CtlCam(pathObj, featCur):
-    '''
-    Compare centre coordinates to extended MD
-    '''
-    idImg=featCur['id']
-    pathImg1B=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idImg))
-    pathTsai=pathObj.nTsai[1].format(pathImg1B.split('.')[0])
-    if not os.path.exists(pathTsai): SubLogger('ERROR', 'Camera not found %s'% pathTsai)
-
-    camPt=GeomFunc.ObjTsai(pathTsai)['matC'].flatten()
-
-    pathSelect=os.path.join(pathObj.pB, fileSelec.format(os.path.basename(pathObj.pB)))
-    if not os.path.exists(pathSelect): SubLogger('ERROR', 'Select file not found %s'% pathSelect)
-    with open(pathSelect) as fileIn:
-        jsonIn=json.load(fileIn)
-    
-    key=('Features'*('Features' in jsonIn) or 'features'*('features' in jsonIn))
-    featProp=[feat for feat in jsonIn[key] if feat['id']==idImg][0]['properties']
-    mdPt=np.array([featProp['ecefX_m'], featProp['ecefY_m'], featProp['ecefZ_m']])
-    
-    return camPt-mdPt
-
-def CtlCamStat(lstIn):
-    '''
-    Summarize CtlCam results
-    '''
-    mat=np.array(lstIn)
-    SubLogger('INFO', 'Camera position Statistics')
-    print('ECEF [m]:\tX\tY\tZ\t3D')
-    ave=np.round(np.average(mat, axis=0), 1)
-    print('Average :', ave, np.round(np.sqrt(np.sum(np.square(ave))), 1))
-    rms=np.round(np.sqrt(np.average(np.square(mat), axis=0)), 1)
-    print('RMS     :', rms, np.round(np.sqrt(np.sum(np.square(rms))), 1))
-    std=np.round(np.std(mat, axis=0), 1)
-    print('Std Dev :', std, np.round(np.sqrt(np.sum(np.square(std))), 1))
-    maxCur=np.round(np.amax(mat, axis=0), 1)
-    print('Maximum :', maxCur, np.round(np.sqrt(np.sum(np.square(maxCur))), 1))
-    minCur=np.round(np.amin(mat, axis=0), 1)
-    print('Minimum :', minCur, np.round(np.sqrt(np.sum(np.square(minCur))), 1))
-
-def KpCsv2Geojson(prefIn):
-    '''
-    Convert CSV files with key points from ASP to geojson files.
-
-    prefIn (str): bundle adjustment prefix
-    out:
-        0
-    '''
-    from copy import deepcopy
-
-    for nameCur in ('-initial_residuals_no_loss_function_pointmap_point_log.csv', '-final_residuals_no_loss_function_pointmap_point_log.csv'):  
-        pathIn=prefIn+nameCur
-        if not os.path.exists(pathIn): 
-            SubLogger('ERROR', '%s file not found'% nameCur)
-            continue
-        pathOut=pathIn.replace('csv','geojson')
-        if os.path.exists(pathOut): continue
-
-        jsonOut=deepcopy(tempGeojson)
-        jsonOut['name']=os.path.basename(pathIn).split('_')[0]
-
-        with open(pathIn) as fileIn:
-            for i,lineCur in enumerate(fileIn):
-                if lineCur.startswith('#'): continue
-                wordsCur=lineCur.strip().split(', ')
-
-                dicOut={"type": "Feature", "id": i}
-                dicOut["properties"]={'id': i,
-                                      'Long': float(wordsCur[0]),
-                                      'Lat': float(wordsCur[1]),
-                                      'Height': float(wordsCur[2]),
-                                      'Res': float(wordsCur[3]),
-                                      'NbObs': int(wordsCur[4].replace(' # GCP', '')),
-                                      'GCP': wordsCur[-1].endswith('GCP'),
-                                      }
-                dicOut["geometry"]= {"type": "Point", "coordinates":[float(wordsCur[0]), float(wordsCur[1]), float(wordsCur[2])]}
-                jsonOut['Features'].append(dicOut)
-
-        with open(pathOut, 'w') as fileOut:
-            fileOut.write(json.dumps(jsonOut, indent=2))
-    
-    return 0
-
-def KpCsv2Gcp(pathIn, prefOut, accuXY=1, accuZ=1, accuI=1):
-    '''
-    Read a cnet.csv file, change of point accuracy (Std Dev),
-    save it to the Ba folder with gcp extention.
-
-    Useful for BA-EO with GCP but the function does not 
-    read DEM Height !!!
+        pathOut (str): path of the new file
     '''
     descGound=('id', 'Lat', 'Long', 'H', 'sigX', 'sigY', 'sigZ')
     lenG=len(descGound)
@@ -1321,29 +1019,45 @@ def KpCsv2Gcp(pathIn, prefOut, accuXY=1, accuZ=1, accuI=1):
     # Read
     with open(pathIn) as fileIn:
         lstIn=[lineCur.strip().split() for lineCur in fileIn.readlines()]
-
+    
     # Update and write
-    pathOut=prefOut+'-KP2GCP_XY%i_Z%i_I%i.gcp'% (accuXY, accuZ, accuI)
+    pathOut=prefOut+'-KP2GCP_XYZ%i_I%i.gcp'% (accuXYZ, accuI)
     fileOut=open(pathOut, 'w')
 
-    for ptIn in lstIn:
+    # Point selection from characteristics:
+    if not nbPts:
+        iPts=range(len(lstIn))
+    else:
+        matChara=np.array([lineCur[1:4]+[(len(lineCur)-lenG)//lenI, ] 
+                                    for lineCur in lstIn],
+                            dtype=float)
+        
+        iPts=[]
+        for iCol in range(matChara.shape[1]):
+            # Random selection of extreme values, the limit of extrem values is fixed as 1% of the number of points
+            # e.g. 500 points in csv, random selection within the 5 first and 5 last points
+            iOfIRandom=np.random.random_integers(0, int(0.01*len(lstIn)), 2*nbPts)
+            iSorted=np.argsort(matChara[:,iCol])
+            iPts+=list(iSorted[iOfIRandom[:nbPts]])+list(iSorted[-iOfIRandom[nbPts:]])
+    
+    for iPt in iPts:
+        ptIn=lstIn[iPt]
         ptOut=[]
         
         # Ground
         for i in range(lenG):
-            if not i in (4, 5, 6):
+            if i<4:
                 ptOut.append(ptIn[i])
                 continue
-            if i==6:
-                ptOut.append(str(accuZ))
             else:
-                ptOut.append(str(accuXY))
-                
+                ptOut.append(str(accuXYZ))  
             
         # Image
         nbImg=(len(ptIn)-lenG)//lenI
         for j in range(nbImg):  
             # Image Path
+            if not os.path.exists(ptIn[lenG+j*lenI]): 
+                SubLogger('CRITICAL', 'Image path does not exists, are you in vagrant ?\n%s'% ptIn[lenG+j*lenI])
             ptOut.append(ptIn[lenG+j*lenI]) 
             
             # Coords
@@ -1363,7 +1077,9 @@ def KpCsv2Gcp(pathIn, prefOut, accuXY=1, accuZ=1, accuI=1):
         fileOut.write(' '.join(ptOut)+'\n')
     
     fileOut.close()
-    return 0
+    return pathOut
+
+##########################################
 
 def DisplayMat(mat):
     from PIL import Image

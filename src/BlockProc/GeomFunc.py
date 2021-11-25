@@ -2,13 +2,13 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys
-from math import pi
+from math import sin, cos, asin, acos, tan, atan2, pi
 import json
 import xml.etree.ElementTree as ET
 import logging
 from pprint import pprint
 import numpy as np
-from numpy.linalg import inv, svd, lstsq, det, norm
+from numpy.linalg import inv, svd, lstsq, det, norm, matrix_rank
 from sklearn.preprocessing import PolynomialFeatures
 
 
@@ -34,8 +34,9 @@ class TSAIin:
     Create a object from Tsai file. It holds attributs with varribles
     from the the read file and additional attributs computed and updated
     in the class. It does not distinguish tsai versions and camera types.
+    An empty object can be created by feeding a dictionary as input
     
-    pathIn (str): tsai file path
+    objInput (str|dict): tsai file path | parameters dictionary
     out:
         TSAIin (class): object with attributs
             version (str): fixed file version (4)
@@ -56,35 +57,47 @@ class TSAIin:
             functions:
                 __str__(): manage string output
                 __write__(): writtable list
-                Update(): update class attributes from file attributs
+                _RfromAngles(): update rotation matrix from angles
+                Update(): update class matrices from file attributs (C, R, ...)
                 ApplyDisto(direc, pts): apply distortion model to list of points
     '''
     version='4'
     camType='PINHOLE'
 
-    def __init__(self, pathIn):
+    def __init__(self, objInput=None):
         '''
         Read tsai file and create file attributes. It also updates class attrbutes.
         '''
-        if not os.path.exists(pathIn): SubLogger('CRITICAL', 'pathIn does not exists')
-        with open(pathIn) as fileIn:
-            for i, lineCur in enumerate(fileIn):
-                if i<2: continue
+        if type(objInput)==str: 
+            if not os.path.exists(objInput): SubLogger('CRITICAL', 'Path not found: %s'% objInput)
+            with open(objInput) as fileIn:
+                for i, lineCur in enumerate(fileIn):
+                    if i<2: continue
 
-                words=[part.strip() for part in lineCur.strip().split('=')]
-                if len(words)>1:
-                    if len(words[1].split())==1:
-                        setattr(self, words[0], float(words[1]))
+                    words=[part.strip() for part in lineCur.strip().split('=')]
+                    if len(words)>1:
+                        if len(words[1].split())==1:
+                            setattr(self, words[0], float(words[1]))
+                        else:
+                            setattr(self, words[0], np.array([float(part) for part in words[1].split()]))
+                        
+                        if 'direction' in words[0]:
+                            setattr(self, words[0], getattr(self, words[0]).astype(int))
                     else:
-                        setattr(self, words[0], np.array([float(part) for part in words[1].split()]))
-                    
-                    if 'direction' in words[0]:
-                        setattr(self, words[0], getattr(self, words[0]).astype(int))
-                else:
-                    setattr(self, 'distoType', lineCur.strip())
+                        setattr(self, 'distoType', lineCur.strip())
 
-        if not self.fu==self.fv: SubLogger('CRITICAL', 'Rectangular pixels are not managed by the function')
-        self.Update()
+            if not self.fu==self.fv: SubLogger('CRITICAL', 'Rectangular pixels are not managed by the function')
+            self.UpdateTsai()
+        
+        elif type(objInput)==dict:
+            for key in objInput:
+                setattr(self, key, objInput[key])
+            
+            # Complete object
+            if not 'distoType' in self.__dir__(): setattr(self, 'distoType', 'NULL')
+            if not 'u_direction' in self.__dir__(): setattr(self, 'u_direction', np.array([1, 0, 0]))
+            if not 'v_direction' in self.__dir__(): setattr(self, 'v_direction', np.array([0, 1, 0]))
+            if not 'w_direction' in self.__dir__(): setattr(self, 'w_direction', np.array([0, 0, 1]))
 
     def __str__(self):
         # Print float values
@@ -123,12 +136,31 @@ class TSAIin:
         lstOut+=['%s = %s\n'% (tag, str(getattr(self,tag))) for tag in lstTag]
 
         return lstOut
+        
+    def _RfromAngles(self, lstAngle):
+        '''
+        Update the rotation matrix from a list of angles. It uses
+        a rotation matix convention: intrinsic R(k).R(p).R(o).
 
-    def Update(self):
+        lstAngle (lst or array):
+        out:
+            0 (int)
+        '''
+        if not len(lstAngle): SubLogger('CRITICAL', 'Angle list must contain 3 float values')
+
+        omega, phi, kappa= lstAngle
+        setattr(self, 'R', 
+                np.array([[ cos(phi)*cos(kappa),  cos(omega)*sin(kappa)+sin(omega)*sin(phi)*cos(kappa), sin(omega)*sin(kappa)-cos(omega)*sin(phi)*cos(kappa) ],
+                          [-cos(phi)*sin(kappa),  cos(omega)*cos(kappa)-sin(omega)*sin(phi)*sin(kappa), sin(omega)*cos(kappa)+cos(omega)*sin(phi)*sin(kappa) ],
+                          [ sin(phi)           , -sin(omega)*cos(phi)                                 , cos(omega)*cos(phi) ] ]
+                          ).T.flatten())
+
+    def UpdateTsai(self):
         setattr(self, 'vectF', np.array([self.fu, self.fv]))
         setattr(self, 'vectPP', np.array([self.cu, self.cv]))
-        setattr(self, 'matR', self.R.reshape(3,3).T)
-        if not abs(round(det(self.matR), 2))==1.0: SubLogger('CRITICAL', '|R| = %.2f =/= 1, wrong dataset'% round(det(self.matR), 2))
+        setattr(self, 'matR', inv(self.R.reshape(3,3)))
+        if not abs(round(det(self.matR), 2))==1.0: SubLogger('CRITICAL', '|R| = %.2f =/= 1'% round(det(self.matR), 2))
+        if not np.allclose(self.matR.T, inv(self.matR)): SubLogger('CRITICAL', 'R^T=/=R^{-1}')
         if det(self.matR)<0:
             matR=self.matR*(-1)
             setattr(self, 'matR', matR)
@@ -144,8 +176,8 @@ class TSAIin:
 
     def ApplyDisto(self, direction, ptsIn):
         '''
-        Apply a distortion model to given points. The direction is requested
-        in order to ensure match between wish and available model.
+        Apply a distortion model to given points [pixel]. It requests 
+        the direction in order to ensure match between wishes and available model.
         
         direction ('add'|'remove'): direction, add/remove the distortion
         ptsIn (array [[x, y], [...]]): point to correct
@@ -156,18 +188,18 @@ class TSAIin:
         if not ptsIn.shape[1]==2: SubLogger('CRITICAL', 'wrong input points')
 
         if direction=='add' and self.distoType=='TSAI':
-            vectPP_pxl=self.vectPP/self.pitch
-            vectF_pxl=self.vectF/self.pitch
+            vectPP_pxl=np.array([self.cu, self.cv])/self.pitch
+            vectF_pxl=np.array([self.fu, self.fv])/self.pitch
             
             # Normalisation
             ptsIn_off=ptsIn-vectPP_pxl
             ptsIn_n=ptsIn_off/vectF_pxl
-            radIn_n=norm(ptsIn_n, axis=1)[:,np.newaxis]
+            rad2In_n=np.square(norm(ptsIn_n, axis=1))[:,np.newaxis]
             
             # Distortion correction
-            dRad=(self.k1*radIn_n**2+self.k2*radIn_n**4)
-            vectDistP=np.array([self.p1, self.p2])
-            dTang=(2*vectDistP*ptsIn_n[:,[1,0]] + vectDistP[[1,0]]*(radIn_n/ptsIn_n+2*ptsIn_n))  #ptsIn_off* [:,np.newaxis]
+            dRad=rad2In_n*(self.k1+self.k2*rad2In_n)
+            sumP1yP2x=np.sum(np.array([self.p2, self.p1])*ptsIn_n*2, axis=1)
+            dTang=np.array([self.p2, self.p1])*rad2In_n/ptsIn_n+sumP1yP2x[:, np.newaxis]
             
             # Correction
             ptsOut=ptsIn+ptsIn_off*(dRad+dTang)
@@ -181,35 +213,90 @@ class TSAIin:
             return ptsOut
             
         elif direction=='remove' and self.distoType=='Photometrix':
-            pass
+            # Normalisation
+            ptsIn_n=ptsIn*self.pitch-np.array([self.cu, self.cv])-np.array([self.xp, self.yp])
+            rad2In_n=np.square(norm(ptsIn_n, axis=1))[:,np.newaxis]
+
+            # Distortion correction
+            dRad=ptsIn_n*rad2In_n*(self.k1+self.k2*rad2In_n+self.k3*rad2In_n*rad2In_n)
+            dTang=np.array([self.p1, self.p2])*(rad2In_n+2*ptsIn_n**2)  +  np.array([self.p2, self.p1])*2*np.prod(ptsIn_n, axis=1)[:,np.newaxis]
+            
+            # Correction
+            ptsOut=ptsIn+(dRad+dTang)/self.pitch
+
+            return ptsOut
+
+        elif direction=='remove' and self.distoType=='BrownConrady':
+            SubLogger('WARNING', 'Not sure of Brown-Conrady implementation')
+            # Normalisation
+            ptsIn_n=ptsIn/self.pitch-self.vectPP-np.array([self.xp, self.yp])
+            radIn_n=norm(ptsIn_n, axis=1)[:,np.newaxis]
+
+            # Distortion correction
+            dRad=ptsIn_n*(self.k1*radIn_n**2+self.k2*radIn_n**4+self.k3*radIn_n**6)
+            vectDistP=np.array([self.p1, self.p2])
+            dTang=self.p1*radIn_n**2+self.p2*radIn_n**4*np.array([-np.sin(self.phi), np.cos(self.phi)])
+            
+            # Correction
+            ptsOut_n=ptsIn_n+dRad+dTang
+            ptsOut=ptsOut_n+self.vectPP
+            
+            return ptsOut*self.pitch
+
         else:
             SubLogger('CRITICAL', 'correction impossible, wrong distortion model: %s'% self.distoType)
 
 class RPCin:
     """
-    Create a RPC python object from metadata files. Currently able to read
-    : XML, tiff tag, RPB file, _RPC.TXT file
+    Create a RPC python object from files. Currently able to read
+    : XML, tiff tag (gdalinfo), RPB file, _RPC.TXT file
+    An empty object can be created before RPC computation internaly.
+    The object is based on Sklearn functions like PolynomialFeatures().
+    Therefore, the polynomial order of coefficients is different. All 
+    importation or exportation functions take care of it (even __str__).
     
     ## Order :
     # Sklearn poly from triple (x0, x1, x2): REF
     # 0,  1,  2,  3,  4 ,   5 ,   6 ,  7 ,   8 ,  9 ,  10,   11 ,   12 ,   13 ,    14 ,   15 ,  16,   17 ,   18 , 19
     # 1, x0, x1, x2, x0², x0x1, x0x2, x1², x1x2, x2², x0³, x0²x1, x0²x2, x0x1², x0x1x2, x0x2², x1³, x1²x2, x1x2², x2³
-    # RPC from geo (Long_L, Lat_P, Hei_H): equal to Seth
+    # RPC from geo (Long_L, Lat_P, Hei_H): equal to Planet
     # 0, 1, 2, 3, 4 , 5 , 6 , 7 , 8 , 9 , 10 , 11 , 12 , 13 , 14 , 15 , 16 , 17 , 18 , 19
     # 1, L, P, H, LP, LH, PH, L², P², H², PLH, L³ , LP², LH², L²P, P³ , PH², L²H, P²H, H³
-    # 0, 1, 2, 3, 5 , 6 , 8 , 4 , 7 , 9 , 14 , 10 , 13 , 15 , 11 , 16 , 18 , 12 , 17 , 19
     # RPC from Fraser (X, Y, Z):
     # 0, 1, 2, 3, 4 , 5 , 6 , 7 , 8 , 9 , 10 , 11 , 12 , 13 , 14 , 15 , 16 , 17 , 18 , 19
     # 1, Y, X, Z, YX, YZ, XZ, Y², X², Z², XYZ,  Y³, YX², YZ², Y²X,  X³, XZ², Y²Z, X²Z, Z³
-    # RPC from Seth (Long_L, Lat_P, Hei_H):
+    # RPC from Planet (Long_L, Lat_P, Hei_H): Seth
     # 0, 1, 2, 3, 4 , 5 , 6 , 7 , 8 , 9 , 10 , 11 , 12 , 13 , 14 , 15 , 16 , 17 , 18 , 19
-    # 1, L, P, H, LP, LH, PH, L2, P2, H2, LPH, L3 , LP2, LH2, L2P, P3 , PH2, L2H, P2H, H3
+    # 1, L, P, H, LP, LH, PH, L², P², H², LPH, L³ , LP², LH², L²P, P³ , PH², L²H, P²H, H³
 
     
-    pathCur (string): file path
-    
+    pathCur (string): file path (default: None means an empty object)
     out:
         self (RPC object): available features printable through str(RPCin) or dir(RPCin)
+        object attributes:
+            path (str): original file path
+            src (str): file type
+            lineOffset, sampOffset, latOffset, longOffset, heiOffset (float): offset values
+            lineScale,sampScale latScale, longScale, heiScale (float): scale values
+            error_RpcCoef (lst): computation residuals
+            matRpcCoef (array): RPC coefficients with Sklearn convention [x(sample), y(line)]
+            error_InvRpcCoef (lst): computation residuals
+            matInvCoef (array): inverse RPC coefficients with Sklearn convention [x(sample), y(line)]
+            iCoef_RPC2Sklearn, iCoef_Sklearn2RPC: coefficient indices
+        object functions:
+            __init__(): initialtisation
+            __str__(): returns printable version
+            __write__(): returns writable list
+            Comput_InvRPC(): computes inverse RPC
+            Comput_RPC(): computes RPC
+            Obj2Img(): transformation object to image
+            Img2Obj_Z(): tranforation image to object
+            InputNorm(): sets offeset and scale values
+            Offset(): returns offset values
+            Scale(): returns scale values
+            Read_Rpb(), Read_RpcTxt(), Read_Tif(), Read_Xml(),
+            Solver(): solver engine
+
     """
     iCoef_RPC2Sklearn=[0, 1, 2, 3, 7 , 4 , 5 , 8 , 6 , 9 , 11 , 14 , 17 , 12 , 10 , 13 , 15 , 18 , 16 , 19]
     iCoef_Sklearn2RPC=[0, 1, 2, 3, 5 , 6 , 8 , 4 , 7 , 9 , 14 , 10 , 13 , 15 , 11 , 16 , 18 , 12 , 17 , 19]
@@ -262,29 +349,28 @@ class RPCin:
         if fileType=='txt':
             tagTable=(('lineOffset', 'LINE_OFF'),
                       ('sampOffset', 'SAMP_OFF'),
-                      ('longOffset', 'LONG_OFF'),
                       ('latOffset' , 'LAT_OFF'),
+                      ('longOffset', 'LONG_OFF'),
                       ('heiOffset' , 'HEIGHT_OFF'),
                       ('lineScale' , 'LINE_SCALE'),
                       ('sampScale' , 'SAMP_SCALE'),
-                      ('longScale' , 'LONG_SCALE'),
                       ('latScale'  , 'LAT_SCALE'),
+                      ('longScale' , 'LONG_SCALE'),
                       ('heiScale'  , 'HEIGHT_SCALE'),
-                      'LINE_NUM_COEFF_',
-                      'LINE_DEN_COEFF_',
-                      'SAMP_NUM_COEFF_',
-                      'SAMP_DEN_COEFF_')
-        else:
-            SubLogger('CRITICAL', 'Unknown fileType to write')
+                      )
+            lstOut=['{}: {}\n'.format(tag, self.__getattribute__(key)) for key,tag in tagTable]
+        
+            matRpcCoef=self.matRpcCoef[:, self.iCoef_Sklearn2RPC]
+            m=len(self.iCoef_Sklearn2RPC)
+            lstOut+=['LINE_NUM_COEFF_{}: {}\n'.format(j+1, matRpcCoef[2,j]) for j in range(m)]
+            lstOut+=['LINE_DEN_COEFF_{}: {}\n'.format(j+1, matRpcCoef[3,j]) for j in range(m)]
+            lstOut+=['SAMP_NUM_COEFF_{}: {}\n'.format(j+1, matRpcCoef[0,j]) for j in range(m)]
+            lstOut+=['SAMP_DEN_COEFF_{}: {}\n'.format(j+1, matRpcCoef[1,j]) for j in range(m)]
+        
+            return lstOut
 
-        lstOut=['{}: {}\n'.format(tag, self.__getattribute__(key)) for key,tag in tagTable[:-4]]
-        
-        matRpcCoef=self.matRpcCoef[:, self.iCoef_Sklearn2RPC]
-        m=matRpcCoef.shape[1]
-        for i, tag in enumerate(tagTable[-4:]):
-            lstOut+=['{}{}: {}\n'.format(tag, j+1, matRpcCoef[i,j]) for j in range(m)]
-        
-        return lstOut
+        else:
+            SubLogger('CRITICAL', 'Unknown fileType to write') 
 
     def Read_Xml(self):
         '''
@@ -519,7 +605,7 @@ class RPCin:
         
         mesh=np.meshgrid(np.linspace(-1.1, 1.1, num=9),
                          np.linspace(-1.1, 1.1, num=9),
-                         np.linspace(-0.3, 0.3, num=7))
+                         np.linspace(-0.3, 0.3, num=9))
 
         # [[Long, Lat, Hei], ...]
         pts3DN=np.hstack((mesh[0].reshape(-1,1),
@@ -629,11 +715,10 @@ class RPCin:
     
     def Comput_RPC(self, pts3D, pts2D, orderPoly=3, solver=3):
         '''
-        Compute RPC coefficient by Singular Value Decomposition (SVD).
-        The polynomial order can be adjusted but it remains linked to 
-        the GCP number. A maximum order stands at 3 due to object design. 
-        A 1st order polynomial requires at least 7 GCPs (2: 19 and 3: 39). 
-        Normalisation values have to be set in before.
+        Compute RPC coefficients.The polynomial order can be adjusted but 
+        it remains linked to the GCP number. A maximum order stands at 3 due 
+        to object design. A 1st order polynomial requires at least 
+        7 GCPs (2: 19 and 3: 39). Normalisation values have to be set in before.
         
         pts3D (array: [[Long (L), Lat (P), H], [...]] or [[X, Y, Z], [...]]): 
             point ground coordinates not normalised
@@ -653,10 +738,10 @@ class RPCin:
         
         if not type(orderPoly)==int and not 0<orderPoly<4: SubLogger('CRITICAL', 'Wrong polynomial order')
         
+        nbPts=pts2D.shape[0]
         nbFeat=PolynomialFeatures(orderPoly).fit(np.array([[1,2,3]])).powers_.shape[0]*2
-        if pts2D.shape[0]<nbFeat:
-            if pts2D.shape[0]<nbFeat-1 or not solver==2:
-                SubLogger('CRITICAL', 'Not enough GCP for %i order polynimal'% orderPoly)
+        if (1<solver<4 and nbPts<nbFeat-1) or (-1<solver<2 and nbPts<nbFeat):
+            SubLogger('CRITICAL', 'Not enough GCP for %i order polynimal: change either polynomial order, point number or solver method'% orderPoly)
         
         pts3DN=(pts3D-self.Offset(d=3))/self.Scale(d=3)
         pts2DN=(pts2D-self.Offset(d=2))/self.Scale(d=2)
@@ -689,7 +774,7 @@ class RPCin:
         poly=PolynomialFeatures(orderPoly)
         matPoly=poly.fit_transform(pts3D)
         n=poly.powers_.shape[0] #poly.get_feature_names() not compatible with planet_common env
-        
+
         matOut=np.zeros([4,n], dtype=float)
         lstInfo=[]
         
@@ -760,12 +845,15 @@ class RPCin:
                             np.zeros([nbPts, 2*n-1]),
                             matPoly,
                             -pts2D[:,[1]]*matPoly[:,1:]
-                            )).reshape(-1, (2*n-1)*2)
+                            )).reshape(2*nbPts, (2*n-1)*2)
             #Y=[[x], [y], [x], [y], ...]
-            matY=pts2D.reshape(-1,1)
+            matY=pts2D.reshape(2*nbPts,1)
+            
+            if matrix_rank(matA)<(2*n-1)*2: SubLogger('CRITICAL', 'Insufficient rank(A), check point distribution')
+
             #X=[[a0], [a1], ..., [b1], ..., [c0], [c1], ..., [d1], ...]
             matX,normRes=lstsq(matA, matY, rcond=-1)[:2]
-
+            
             if not normRes: SubLogger('CRITICAL', 'Failure')
             matOut=np.insert(matX, [n, 3*n-1], [1]).reshape(4,n)
             lstInfo.append(float(normRes))
@@ -908,6 +996,7 @@ def Cart2Geo_Elli(ptCart,elliAF='WGS84',precision=1e-10):
                       h)).T*degRatio
     
     return ptsOut
+
 #=======================================================================
 #main
 #-----------------------------------------------------------------------

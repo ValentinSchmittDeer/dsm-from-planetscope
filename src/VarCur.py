@@ -43,9 +43,9 @@ __all__ =[# SSBP
           'camCentre',
           'camFocal',
           'camPitch',
-          'camDistBa',
-          'camDistExp',
-          'factConstSat',
+          #'camDistBa',
+          #'camDistExp',
+          #'factConstSat',
           'gsdOrth',
           ## MSS
           'methodDM',
@@ -156,9 +156,12 @@ class PathCur:
         # Extention
         self.extFeat=dicLevel[self.l][1]
         self.extRpc='{}_RPC.TXT'.format(self.extFeat[:-4])
-        self.extFeat1B='{}_1b.tif'.format(self.extFeat[:-4])
+        self.extRpcNdisto='{}_RPCnoDisto.TXT'.format(self.extFeat[:-4])
+        self.extFeat1B='{}_1b.tif'#.format(self.extFeat[:-4])
         self.extRpc1B='{}_RPC.TXT'.format(self.extFeat1B[:-4])
         self.extRpc1Bx='{}.XML'.format(self.extFeat1B[:-4])
+        self.extFeatKP='{}_KP.tif'#.format(self.extFeat[:-4])
+        self.extRpcKP='{}_RPC.TXT'.format(self.extFeatKP[:-4])
         self.nTsai=('{}_0Rough.tsai', 
                     '{}_1Init.tsai',
                     '{}_2Adj.tsai',
@@ -177,15 +180,15 @@ class PathCur:
       return json.dumps(self.__dict__, indent='\t', separators=(',', ':'))
 
 ## ASfM
-# Dove-C, in  pxl: f=127090.909, c=3300 2178, p=1
+# Dove-C, in  pxl: f=127090.909, c=3300 2200, p=1
 # Dove-C, in  mm: f=699, c=18.15 12.1, p=5.5e-3
 camCentre=(18.15, 12.1)
 camFocal=699
 camPitch=5.5e-3
 #<TsaiLensDistortion|BrownConradyDistortion|RPC (default: TsaiLensDistortion)>
-camDistBa='TsaiLensDistortion'
-camDistExp='BrownConradyDistortion'
-factConstSat=1e-9
+#camDistBa='TsaiLensDistortion'
+#camDistExp='BrownConradyDistortion'
+#factConstSat=1e-9
 
 gsdOrth=4
 

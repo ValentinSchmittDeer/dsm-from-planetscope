@@ -45,12 +45,13 @@ class ReadBA:
         self.prefix=pref
         self.dicTsai={}
 
-        grepTsai=os.path.join(pathInit, strTsai.format('*'))
-        for pathCur in glob(grepTsai):
-            name=os.path.basename(pathCur).strip(self.prefix)
+        lstTsai= glob(os.path.join(pathInit, strTsai.format('*')))
+        lstTsai.sort()
+        for pathCur in lstTsai:
+            name=os.path.basename(pathCur).split('.')[0].strip(self.prefix)
             if name in self.dicTsai: continue
 
-            self.dicTsai[name]=[GeomFunc.ObjTsai(pathCur),]
+            self.dicTsai[name]=[GeomFunc.TSAIin(pathCur),]
     
     def __str__(self,name=''):
         strOut=''
@@ -59,13 +60,7 @@ class ReadBA:
             strOut+='\n%s <%s, %i>:'% (sceneKey, type(self.dicTsai[sceneKey]).__name__, len(self.dicTsai[sceneKey]))
             
             for i in range(len(self.dicTsai[sceneKey])):
-                strOut+='\n\t%i <%s, %i>:'% (i, type(self.dicTsai[sceneKey][i]).__name__, len(self.dicTsai[sceneKey][i]))
-
-                for itemKey in self.dicTsai[sceneKey][i]:
-                    strOut+='\n\t\t%s: <%s,'% (itemKey, type(self.dicTsai[sceneKey][i][itemKey]).__name__)
-                    if not type(self.dicTsai[sceneKey][i][itemKey])==float:
-                        strOut+=' %i'% len(self.dicTsai[sceneKey][i][itemKey])
-                    strOut+='>,'
+                strOut+='\n\t%i: <%s>'% (i, type(self.dicTsai[sceneKey][i]).__name__)
 
         return strOut
     
@@ -73,10 +68,10 @@ class ReadBA:
         # Read camera
         grepTsai=os.path.join(pathDir, self.strTsai.format('*'))
         for pathCur in glob(grepTsai):
-            name=os.path.basename(pathCur).strip(self.prefix)
+            name=os.path.basename(pathCur).split('.')[0].strip(self.prefix)
             if not name in self.dicTsai: continue 
             
-            self.dicTsai[name].append(GeomFunc.ObjTsai(pathCur))
+            self.dicTsai[name].append(GeomFunc.TSAIin(pathCur))
 
     def AddBA(self, pathDir): 
         # Read residuals
@@ -91,14 +86,14 @@ class ReadBA:
                     if not lineCur.startswith('/'): continue
                     
                     words=lineCur.strip().split(', ')
-                    name=os.path.basename(words[0]).strip(self.prefix)
+                    name=os.path.basename(words[0]).split('.')[0].strip(self.prefix)
                     
                     if not checkCamPart:
-                        self.dicTsai[name][-1]['resiKP-%s'% step]=float(words[1])
-                        self.dicTsai[name][-1]['numKP-%s'% step]=float(words[2])
+                        setattr(self.dicTsai[name][-1], 'resiKP%s'% step, float(words[1]))
+                        setattr(self.dicTsai[name][-1], 'numKP%s'% step, float(words[2]))
                     else:
-                        self.dicTsai[name][-1]['resiTrans-%s'% step]=float(words[1])
-                        self.dicTsai[name][-1]['resiRot-%s'% step]=float(words[2])
+                        setattr(self.dicTsai[name][-1], 'resiTrans%s'% step, float(words[1]))
+                        setattr(self.dicTsai[name][-1], 'resiRot%s'% step, float(words[2]))
             
     def Valid(self, checkBA):
         if len(self.dicTsai)==1: logger.warning('Only one scene in the assessment')
@@ -110,7 +105,7 @@ class ReadBA:
         if not checkBA: return msg
         lstCheck=[]
         for step in ('initial', 'final'):
-            lstCheck+=['numKP-%s'% step in self.dicTsai[key][i] for key in self.dicTsai for i in range(1,len(self.dicTsai[key]))]
+            lstCheck+=['numKP%s'% step in self.dicTsai[key][i].__dict__ for key in self.dicTsai for i in range(1,len(self.dicTsai[key]))]
         if not all(lstCheck): msg='Residuals (initial and/or final) not found'
         return msg
 
@@ -118,37 +113,28 @@ def KP2Matrix(pathDir):
     '''
     Read initial and final point coordinate and store them into a matrix
     '''
+    # Read initial KP
+    pathKpCsv=glob(os.path.join(pathDir,'*initial_residuals_no_loss_function_pointmap_point_log.csv'))
+    if not pathKpCsv: raise RuntimeError("Initial residual fil not found")
+    with open(pathKpCsv[0]) as fileIn:
+        txtInit=[lineCur.strip().strip('# GCP').split(', ') for lineCur in fileIn.readlines() if not lineCur.startswith('#')]
+    matInit=np.array(txtInit, dtype=float)
+    
+    # Read final KP
+    pathKpCsv=glob(os.path.join(pathDir,'*final_residuals_no_loss_function_pointmap_point_log.csv'))
+    if not pathKpCsv: raise RuntimeError("Final residual fil not found")
+    with open(pathKpCsv[0]) as fileIn:
+        txtFinal=[lineCur.strip().strip('# GCP').split(', ') for lineCur in fileIn.readlines() if not lineCur.startswith('#')]
+    matFinal=np.array(txtFinal, dtype=float)
 
-    # Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1, GcpBool
-    matIn=np.empty([9])
+    nbPts=len(txtFinal)
+    
+    # Find closest point
+    matOut=np.append([matInit[np.argmin(norm(matInit[:,:2]-matFinal[i, :2], axis=1)),:4] for i in range(nbPts)], 
+                     matFinal[:, :4], axis=1)
 
-    # Read KP
-    for i,step in enumerate(('initial', 'final')):
-        pathKpCsv=glob(os.path.join(pathDir,'*%s_residuals_no_loss_function_pointmap_point_log.csv'% step))
-        if not pathKpCsv: continue
-
-        pathKpCsv=pathKpCsv[0]
-        with open(pathKpCsv) as fileIn:
-            txtIn=[lineCur for lineCur in fileIn.readlines() if not lineCur.startswith('#')]
-        if not i :
-            # Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1, GcpBool
-            matIn=np.ones([len(txtIn),9])*np.nan
-
-        for j,lineCur in enumerate(txtIn):
-            if lineCur.startswith('#'): continue
-            
-            words=lineCur.strip().split(', ')
-
-            matIn[j,i*4:i*4+4]=[float(k) for k in words[:4]]
-            if i and words[-1].endswith('GCP'):
-                matIn[j,-1]=1
-            else:
-                matIn[j,-1]=0
-
-    # Long0, Lat0, Height0, Res0, DLong, DLat1, DHeight, DRes, GcpBool
-    #matOut=np.hstack((matIn[:,:4],matIn[:,4:8]-matIn[:,0:4], matIn[:, [-1]]))
-
-    return matIn
+    # Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1
+    return matOut
 
 def TableDiff(dicTsai, nbBa, argsCur):
     '''
@@ -160,9 +146,10 @@ def TableDiff(dicTsai, nbBa, argsCur):
     print('='*(colLen[0]+10)+'{:^26}'.format('Differences Table')+'='*(13+colLen[1]*nbBa+3*(nbBa-1)))
     Table_Line('ImgID','Name', ['Init']+lstBaName)
     lstKind=['3DCentre[m]', 'Angles[°]']
-    if argsCur.io: lstKind+=['Focal[mm]', '2DPP[mm]']
+    if argsCur.eo: lstKind+=['X[m]', 'Y[m]', 'Z[m]']
+    if argsCur.io: lstKind+=['Focal[mm]', '2DPP[mm]', 'K1[pxl_n]', 'K2[pxl_n]', 'P1[pxl_n]', 'P2[pxl_n]']
     for kind in lstKind:
-        print(kind+':')
+        print(kind+': '+'-'*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)-2-len(kind)))
 
         mat=np.ones(shapeCur)*np.nan
         for i, sceneId in enumerate(sorted(dicTsai)):                    
@@ -170,23 +157,46 @@ def TableDiff(dicTsai, nbBa, argsCur):
             if not len(lstCur)==1+nbBa: continue
 
             if kind=='3DCentre[m]':
-                mat[i,:]=[np.round(norm(obj['matC']-lstCur[0]['matC']), 3) 
+                mat[i,:]=[np.round(norm(obj.vectX0-lstCur[0].vectX0), 3)
                                 for obj in lstCur]
             elif kind=='Angles[°]':
-                lstVect=[obj['matR']@np.array([[0],[0],[1]]) for obj in lstCur]
+                lstVect=[obj.matR@np.array([[0],[0],[1]]) for obj in lstCur]
                 lstCos=[round(1-abs(1-(np.vdot(vect,lstVect[0]))), 7) for vect in lstVect]
                 mat[i,:]=[round(acos(valCos)*180/pi, 4) for valCos in lstCos]
+            elif kind=='X[m]':
+                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[0,0], 3)
+                                for obj in lstCur]
+            elif kind=='Y[m]':
+                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[1,0], 3)
+                                for obj in lstCur]
+            elif kind=='Z[m]':
+                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[2,0], 3)
+                                for obj in lstCur]
             elif kind=='Focal[mm]':
-                mat[i,:]=[round(obj['fu'][0]-lstCur[0]['fu'][0], 3) 
+                mat[i,:]=[round(obj.fu-lstCur[0].fu, 6) 
                                 for obj in lstCur]
             elif kind=='2DPP[mm]':
-                mat[i,:]=[np.round(norm(obj['matPP']-lstCur[0]['matPP']), 3)
+                mat[i,:]=[np.round(norm(obj.vectPP-lstCur[0].vectPP), 6)
                                 for obj in lstCur]
+            elif kind=='K1[pxl_n]':
+                mat[i,:]=[np.round(obj.k1-lstCur[0].k1, 6)
+                                for obj in lstCur]
+            elif kind=='K2[pxl_n]':
+                mat[i,:]=[np.round(obj.k2-lstCur[0].k2, 6)
+                                for obj in lstCur]
+            elif kind=='P1[pxl_n]':
+                mat[i,:]=[np.round(obj.p1-lstCur[0].p1, 6)
+                                for obj in lstCur]
+            elif kind=='P2[pxl_n]':
+                mat[i,:]=[np.round(obj.p2-lstCur[0].p2, 6)
+                                for obj in lstCur]
+
 
             if argsCur.longTable: Table_Line(i, 'Diff '+kind, list(mat[i,:]))
         
+        if argsCur.longTable: Table_Line('.'*colLen[0], '.'*colLen[1], ['.'*colLen[1]]*(mat.shape[1]))
         Table_Sum(mat, 'Diff '+kind)
-    print('.'*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)))
+    print('='*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)))
 
 def TableRes(dicTsai, nbBa, argsCur):
     # Residual table
@@ -196,21 +206,22 @@ def TableRes(dicTsai, nbBa, argsCur):
     Table_Line('ImgID', 'Name', ['Init']+lstBaName)
     
     for kind in ('Tranlation[m]', 'Rotation[°]', 'KeyPoints[pxl]'):
-        print(kind+':')
+        print(kind+': '+'-'*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)-2-len(kind)))
 
         mat=np.ones(shapeCur)*np.nan
         for i, sceneId in enumerate(sorted(dicTsai)):
             lstCur=dicTsai[sceneId]
             
             if kind=='Tranlation[m]':
-                mat[i,:]=[0]+[round(obj['resiTrans-final'], 3) for obj in lstCur[1:]]
+                mat[i,:]=[0]+[round(obj.resiTransfinal, 3) for obj in lstCur[1:]]
             elif kind=='Rotation[°]':
-                mat[i,:]=[0]+[round(obj['resiRot-final'], 3) for obj in lstCur[1:]]
+                mat[i,:]=[0]+[round(obj.resiRotfinal, 3) for obj in lstCur[1:]]
             elif kind=='KeyPoints[pxl]':
-                mat[i,:]=[0]+[round(obj['resiKP-final'], 1) for obj in lstCur[1:]]
+                mat[i,:]=[0]+[round(obj.resiKPfinal, 1) for obj in lstCur[1:]]
             
             if argsCur.longTable: Table_Line(i,'Resid '+kind, list(mat[i,:]))
         
+        if argsCur.longTable: Table_Line('.'*colLen[0], '.'*colLen[1], ['.'*colLen[1]]*(mat.shape[1]))
         Table_Sum(mat, 'Res '+kind)
     print('='*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)))
 
@@ -221,7 +232,6 @@ def Table_Line(iCur, kindCur, lstVal, lenCur=colLen):
     print(strOut)
 
 def Table_Sum(matIn, kindCur, lenCur=colLen):
-    Table_Line('-'*lenCur[0], '-'*lenCur[1], ['-'*lenCur[1]]*(matIn.shape[1]))
     ave=np.round(np.nanmean(matIn, axis=0), 3)
     Table_Line('Mean', kindCur, ave)
     rms=np.round(np.sqrt(np.nanmean(np.square(matIn), axis=0)), 3)
@@ -248,41 +258,23 @@ def GraphEO(dicTsai, argsCur):
 
     i=-1
     for key in dicTsai:
-        ###
-        argsCur.s=1
-        ###
         if len(dicTsai[key])==1: continue
 
         i+=1
         lstCur=dicTsai[key]
 
-        matPts=np.array([obj['C'] for obj in lstCur])
+        matPts=np.array([obj.C for obj in lstCur])
         matSclPts=np.vstack((matPts[[0],:],
                             (matPts[1:,:]-matPts[0,:])*argsCur.s+matPts[0,:]
                             ))
-
-#sat:lng_deg       sat:lat_deg     sat:alt_km       ecefX_m           ecefY_m                ecefZ_m             
-#-115.716020192 35.2848819683 492.364006937               
-        
-        ############
-        ptSat=np.array([-2436039.819383114, -5058097.105275761, 3948121.8757154937])
-        graph.plot(ptSat[0], ptSat[1], ptSat[2] ,'g^',label='Sat', markersize=10)
-        vect=np.array([[0],[0],[100]])*argsCur.s
-        
-        graph.plot((ptSat[0],matSclPts[1,0]),
-                    (ptSat[1],matSclPts[1,1]), 
-                    (ptSat[2],matSclPts[1,2]),
-                    'g--',label='', markersize=10)
-        print(norm(ptSat-matSclPts[1,:]))
-        ##############
 
         # Camera centre Init
         graph.plot(matPts[0,0], matPts[0,1], matPts[0,2],'r^',label='', markersize=10)
         graph.text(matPts[0,0]+args.s, matPts[0,1]+args.s, matPts[0,2]+args.s,str(i))
 
         # Camera orientation Init
-        #vect=np.array([[0],[0],[10]])*argsCur.s
-        vectR=lstCur[0]['matR']@vect
+        vect=np.array([[0],[0],[100]])*argsCur.s
+        vectR=lstCur[0].matR@vect
         if argsCur.ori: graph.quiver(matSclPts[0,0], matSclPts[0,1], matSclPts[0,2],
                                   vectR[0], vectR[1], vectR[2],
                                   length=50, color='r')
@@ -299,7 +291,7 @@ def GraphEO(dicTsai, argsCur):
             # Camera centre BA
             graph.plot(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],'o', color=lstColours[j],label=labelStr)
             # Camera orientation BA 
-            vectR=lstCur[j]['matR']@vect
+            vectR=lstCur[j].matR@vect
             if argsCur.ori: graph.quiver(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],
                                       vectR[0], vectR[1], vectR[2],
                                       length=50,color='k')
@@ -396,7 +388,8 @@ if __name__ == "__main__":
         parser.add_argument('-pref', default='',help='Additional prefix')
         parser.add_argument('-table',action='store_true',help='Return the table')
         parser.add_argument('-longTable',action='store_true',help='Long table version')
-        parser.add_argument('-io', action='store_true', help='Tabe: print intrinsic parameter difference')
+        parser.add_argument('-io', action='store_true', help='Tabe: print intrinsic parameter differences (focal, PP)')
+        parser.add_argument('-eo', action='store_true', help='Tabe: print extrinsic parameter differences (X, Y, Z')
 
         parser.add_argument('-graphEO',action='store_true',help='Return the graph (interactive graph with matplotlib)')
         parser.add_argument('-s', type=int, default=100, help='Graph: scale factor')
@@ -413,16 +406,17 @@ if __name__ == "__main__":
         if not os.path.isdir(args.init): raise RuntimeError("Initial folder not found")
         
         if args.ba:
-            if False in [os.path.isdir(pathCur) for pathCur in args.ba]: raise RuntimeError("Some BA folder not found")
+            if not all([os.path.isdir(pathCur) for pathCur in args.ba]): raise RuntimeError("Some BA folder not found: %s"% str([os.path.isdir(pathCur) for pathCur in args.ba]))
         elif args.cam:
-            if False in [os.path.isdir(pathCur) for pathCur in args.cam]: raise RuntimeError("Some Cam folder not found")
+            if not all([os.path.isdir(pathCur) for pathCur in args.cam]): raise RuntimeError("Some Cam folder not found: %s"% str([os.path.isdir(pathCur) for pathCur in args.cam]))
         else:
             raise RuntimeError("Either -ba or -cam argument is required")
         if args.init.endswith('/') or True in [pathCur.endswith('/')for pathCur in args.ba+args.cam]: raise RuntimeError("Please remove the last / from folder path")
         
         objTemp=PathCur('', '', '', checkRoutine=False)
         prefix=''.join([os.path.basename(getattr(objTemp,key)) for key in objTemp.__dict__ if key.startswith('pref')])
-        prefix+='-.tsai'
+        #prefix+=''.join([form[3:-5] for form in objTemp.nTsai])
+        prefix+='-'#.tsai'
         prefix+=args.pref
 
         logger.info("Arguments: " + str(vars(args)))
@@ -437,7 +431,7 @@ if __name__ == "__main__":
             logger.info('# Read BA')
             logger.info('Prefix: %s'% prefix)
 
-            objBa=ReadBA(args.init, objTemp.nTsai[0], prefix)
+            objBa=ReadBA(args.init, objTemp.nTsai[1], prefix)
             
             lstBaName=[]
             for pathBA in args.ba+args.cam:
@@ -450,32 +444,41 @@ if __name__ == "__main__":
             if objBa.Valid(len(args.ba)): 
                 print(objBa)
                 raise RuntimeError(objBa.Valid(len(args.ba)))
+
+            logger.info('# Index table')
+            for i, scenId in enumerate(objBa.dicTsai):
+                print('%i: %s'% (i, scenId))
         #---------------------------------------------------------------
         # Read KP
         #---------------------------------------------------------------
         if args.graphKP:
             logger.info('# Read KP')
-
-            # Long0, Lat0, Height0, Res0, DLong, DLat1, DHeight, DRes, GcpBool
-            lstKpGeo=[]
             lstBaName=[]
             for pathBA in args.ba:
                 logger.info(os.path.basename(pathBA))
                 lstBaName.append(os.path.basename(pathBA))
-                lstKpGeo.append(KP2Matrix(pathBA))
-
-            #(BA, pt, component)
-            #   Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1, GcpBool
-            matKpGeo=np.array(lstKpGeo)
-            #   X0, Y0, Z0, X1, Y1, Z1, GcpBool
-            matKpCart=np.array([np.hstack((
-                                            GeomFunc.Geo2Cart_Elli(mat[:,0:3]),
-                                            GeomFunc.Geo2Cart_Elli(mat[:,4:7]),
-                                            mat[:,[-1]]
-                                        )) 
-                                for mat in lstKpGeo])
-            
-        #---------------------------------------------------------------
+                matCur=KP2Matrix(pathBA)
+                
+                if not 'matKpGeo' in locals():
+                    # Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1
+                    matKpGeo=matCur[np.newaxis,:,:]
+                else:
+                    if not matCur.shape[0]==matKpGeo.shape[1]: raise RuntimeError("Must have same number of KP (except discarded features): %i vs %i"% (matCur.shape[0], matKpGeo.shape[1]))
+                    # (BAs, pts, components)
+                    # Components: Long0, Lat0, Height0, Res0, Long1, Lat1, Height1, Res1
+                    matKpGeo=np.append(matKpGeo, matCur[np.newaxis,:,:], axis=0)
+                
+                if not 'matKpCart' in locals():
+                    matKpCart=np.hstack((GeomFunc.Geo2Cart_Elli(matCur[:, 0:3]),
+                                        GeomFunc.Geo2Cart_Elli(matCur[:, 4:7]),
+                                        ))[np.newaxis,:,:]
+                    
+                else:
+                    # (BAs, pts, components)
+                    # Components: X0, Y0, Z0, X1, Y1, Z1
+                    matKpCart=np.append(matKpCart, np.hstack((GeomFunc.Geo2Cart_Elli(matCur[:, 0:3]), GeomFunc.Geo2Cart_Elli(matCur[:, 4:7])))[np.newaxis,:,:], axis=0)
+        
+        #-----------------------------------------------------
         # Tables
         #---------------------------------------------------------------
         if args.table or args.longTable:
@@ -502,7 +505,7 @@ if __name__ == "__main__":
             print('='*(colLen[0]+10)+'{:^26}'.format('Statistics')+'='*(13+colLen[1]*(len(lstBaName)-1)+3*(len(lstBaName)-2)))
             Table_Line('ImgID', 'Key', lstBaName)
             print('3D Adjustment:')
-            Table_Sum(norm(matKpCart[:,:,0:3]-matKpCart[:,:,3:6], axis=2).T, 'Diff 3D coords')
+            Table_Sum(norm(matKpCart[:,:,:3]-matKpCart[:,:,3:], axis=2).T, 'Diff 3D coords')
             print('Height Adjustment:')
             Table_Sum((matKpGeo[:,:,2]-matKpGeo[:,:,6]).T, 'Diff Height')
             print('Initial Residuals:')

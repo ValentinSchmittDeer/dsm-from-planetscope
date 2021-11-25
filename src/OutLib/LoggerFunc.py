@@ -207,9 +207,9 @@ class ProcessStdout:
                                    '#'*int(self.lenBar*ratio),
                                    ' '*int(self.lenBar*(1-ratio)),
                                    ratio*100,
-                                   tSpent//3600,tSpent//60,tSpent%60,
-                                   tLeft//3600,tLeft//60,tLeft%60,
-                                   tTotal//3600,tTotal//60,tTotal%60,
+                                   tSpent//3600,tSpent%3600//60,tSpent%60,
+                                   tLeft//3600,tLeft%3600//60,tLeft%60,
+                                   tTotal//3600,tTotal%3600//60,tTotal%60,
                                    )
         if ratio==1:
             endCur='\n'
@@ -232,7 +232,7 @@ class ProcessStdout:
                             ratio*100,
                             '#'*int(self.lenBar*ratio),
                             ' '*int(self.lenBar*(1-ratio)),
-                            tLeft//3600,tLeft//60,tLeft%60,
+                            tLeft//3600,tLeft%3600//60,tLeft%60,
                             )
         return strOut
 

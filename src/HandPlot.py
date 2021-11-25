@@ -8,6 +8,7 @@ import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 from glob import glob
 import numpy as np
+from numpy.linalg import norm
 
 # dsm_from_planetscope libraries
 from OutLib.LoggerFunc import *
@@ -35,31 +36,55 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-class Obj():
-    '''
-    Desciption
-    
-    arg1 (int):
-    arg2 (float): [default=0]
-    arg3 (sting):
-    arg4 tuple=(x, y):
-    
-    out:
-        jojo (int):
-    '''
-    
-    def __init__(self, arg1, arg3, arg4, arg2=0):
-        self.arg2=arg2
-    
-    def __str__(self):
-        return string(self.arg2)
-    
-    def __obj__(self):
-        return self.arg2
-    
-    def Funct1(self,arg5):
-        '''Desciption'''
+def AddDisto(ptsU, k1, k2, p1, p2, PP=np.array([18.15, 12.1]), f=699):
+    ptsOff=ptsU-PP/5.5e-3
+    ptsN=ptsOff/f*5.5e-3
+    r2N=np.square(norm(ptsN, axis=1))[:,np.newaxis]
+    dRad=r2N*(k1+k2*r2N)
+    sumP1yP2x=np.sum(np.array([p2, p1])*ptsN*2, axis=1)
+    dTang=np.array([p2, p1])*r2N/ptsN+sumP1yP2x[:, np.newaxis]
 
+    return ptsU+ptsOff*(dRad+dTang)
+
+def AddConfig(ptsU, k1, dPP=None, PP=None):
+    
+    if not dPP is None:
+        print(np.round(np.array([3300.0, 2200.0])-dPP, 2))
+        ptsOff=ptsU-(np.array([3300.0, 2200.0])-dPP)
+    elif not PP is None:
+        print(np.round(PP/5.5e-3, 2))
+        ptsOff=ptsU-PP/5.5e-3
+    r2Off=np.square(norm(ptsOff, axis=1))[:,np.newaxis]
+
+    return ptsU+ptsOff*k1*r2Off
+
+def PolarPlot(ptsU, lstPtsD):
+    fig, graph = plt.subplots()
+
+    lstColours=list(mcolors.TABLEAU_COLORS.values())
+    lstLabel=('Basics', 
+            'PP config 1048', 
+            'PP adjust 1048',
+            #'PP config 0f22', 
+            #'PP adjust 0f22',
+            #'PP config 0f15',
+            #'PP adjust 0f15',
+            'PP config 103c',
+            'PP adjust 103c',
+            )
+    rU=norm(ptsU-np.array([3300.0, 2200.0]), axis=1)
+    for i in range(1, len(lstPtsD)):
+        rD=norm(lstPtsD[i]-np.array([3300.0, 2200.0]), axis=1)
+        if 'config' in lstLabel[i]:
+            sym='.'
+        else:
+            sym='x'
+        graph.plot(rU, rD-rU, sym, color=lstColours[(i+1)//2], label=lstLabel[i])
+    
+    rD=norm(lstPtsD[0]-np.array([3300.0, 2200.0]), axis=1)
+    graph.plot(rU, rD-rU, 'k+', label=lstLabel[0])
+    graph.legend()   
+    plt.show()
 #=======================================================================
 #main
 #-----------------------------------------------------------------------
@@ -70,68 +95,64 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Retrieval of arguments
         #---------------------------------------------------------------
-        parser.add_argument('-dir', nargs='+')
+        #parser.add_argument('-dir', nargs='+')
 
 
-        args = parser.parse_args()
+        #args = parser.parse_args()
+
+        meshRange=np.meshgrid(np.linspace(0, 6600, num=50), # x
+                              np.linspace(0, 4400, num=50)) # y
+        pts_pxl_u=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T
 
         #---------------------------------------------------------------
-        # Read
+        # Basics
         #---------------------------------------------------------------
-        #fig, graph = plt.subplots(len(args.dir))
-        fig, graph = plt.subplots(len(args.dir), 1)
-        
-        lstColours=list(mcolors.TABLEAU_COLORS.values())
+        k1Rem_pxl = -3.94502713e-10
+        k1Add_pxl = 4.00255009e-10
+        k1Add_N = 4.00255009e-10*699**2/5.5e-3**2
 
-        for i,dirIn in enumerate(args.dir):
-            pathIn=glob(os.path.join(dirIn, '*.cam_gen'))[0]
-            lstIn=[]
-            with open(pathIn) as fileIn:
-                for lineCur in fileIn:
-                    if not lineCur.startswith('Corner and error'): continue
-                    txtIn=lineCur.strip().split(':')[1].strip('( ')
-                    
-                    r,c=[float(i) for i in txtIn.split(')')[0].split()]
-                    e=float(txtIn.split(')')[1])
-                    lstIn.append((r,-c,e))
-            
-            matIn=np.array(lstIn)
+        lstPts_d=[]
+        # Basics
+        lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0))
+        # K1 OCV 
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.193, 0, 0, 0))
+        # K1 ASP
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.155, 0, 0, 0))
+        # K1,P1,P2 OCV CamWei 20
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.253, 0, -3.197e-4, -1.035e-4))
+        # PP Adjust
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0, PP=np.array([18.16467731, 12.354787059])))
+        #print(np.array([18.16467731, 12.354787059])/5.5e-3)
+        # Focal
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0, f=698.9823494966))
+        # P1,P2 without K1
+        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, -3.197e-4, -1.035e-4))
+        print('Ref\n'+str(np.array(['X', 'Y']))+'\n'+str(np.array([3300.0, 2200.0])))
+        # PP config 1048
+        print('Sat 1048')
+        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([-9.39572, -51.23698])))
+        # PP adjust 1048
+        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.20009441098933, 12.530117372677196])))
+        # PP config 0f22
+        #print('Sat 0f22')
+        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([11.77371, -78.89346])))
+        # PP adjust 0f22
+        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.08367266598664, 12.684050052174625])))
+        # PP config 0f15
+        #print('Sat 0f15')
+        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([-19.51245, 18.34829])))
+        # PP adjust 0f15
+        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.255731584720117, 12.142814090967438])))
+        # PP config 103c
+        print('Sat 103c')
+        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, np.array([-48.14095, 6.91236])))
+        # PP adjust 103c
+        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, np.array([18.413174648888521, 12.206465117990133])))
 
-            pathIn2=glob(os.path.join(dirIn, '*.gcp2disto'))[0]
-            if pathIn2:
-                lstIn=[]
-                with open(pathIn2) as fileIn:
-                    for lineCur in fileIn:
-                        if not lineCur.startswith('Corner and error'): continue
-                        txtIn=lineCur.strip().split(':')[1].strip('( ')
-                        
-                        r,c=[float(i) for i in txtIn.split(')')[0].split()]
-                        e=float(txtIn.split(')')[1])
-                        lstIn.append((r,-c,e))
-                
-                matIn2=np.array(lstIn)
 
-            #---------------------------------------------------------------
-            # Plot
-            #---------------------------------------------------------------
-            if len(args.dir)==1:
-                graphCur=graph
-            else:
-                graphCur=graph[i]
-            
-            s=(50, 50, 50, 50)[i]
-            graphCur.add_patch(Rectangle([0,0], 6600, -2134, fill=False, color='b'))
-            
-            #[graphCur.add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*s, color='r', fill=True)) for j in range(matIn.shape[0]//2)]
-            #[graphCur.add_patch(plt.Circle((matIn[j,0], matIn[j,1]), matIn[j,2]*s, color='g', fill=True)) for j in range(matIn.shape[0]//2,matIn.shape[0])]
-            [graphCur.add_patch(plt.Circle((matIn2[j,0], matIn2[j,1]), matIn2[j,2]*s, color='b',fill=True)) for j in range(matIn2.shape[0])]
-            #graphCur.plot(matIn[:,0], matIn[:,1], '+', color=lstColours[i])
-            
-            graphCur.axis('equal')
-            graphCur.set_title(os.path.basename(dirIn)+' (scale %i)'% s)
+        PolarPlot(pts_pxl_u, lstPts_d)
 
-        
-        plt.show()
+
         #---------------------------------------------------------------
         # Step
         #---------------------------------------------------------------

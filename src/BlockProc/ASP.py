@@ -78,7 +78,7 @@ class AspPython():
             SubLogger('CRITICAL', 'All paths must be absolute')
         return 0
     
-    def _RunCmd_debug(self, fun, subArgs, pathLog):
+    def _RunCmd_debug(self, fun, subArgs, checkCmd=None):
         if self._ValidArgs(subArgs): return 1
         strCmd='{} {} '.format(self.aspCmd, fun)
         strCmd+=' '.join(subArgs)
@@ -86,111 +86,84 @@ class AspPython():
         #sys.exit()
         out=Run(strCmd,
                 shell=True,
-                #check=True,
+                check=checkCmd is not None,
                 )
         
-    def _RunCmd(self, fun, subArgs, pathLog):
+        #if not any([checkCmd in lineCur for lineCur in out.stdout.decode("utf-8").split('\n')]):
+        #    print('strCmd:\n', strCmd)
+        #    SubLogger('CRITICAL', 'That command returned 0 but the process failed: key={!r}'.format(checkCmd))
+
+        return out.returncode
+        
+    def _RunCmd(self, fun, subArgs, checkCmd=None):
         '''
-        Run the given function with the argumets. Then, it stores the output in a text file at pathLog
+        Run the given function with the argumets. The checkCmd argument
+        
         '''
         if self._ValidArgs(subArgs): return 1
         strCmd='{} {} '.format(self.aspCmd, fun)
         strCmd+=' '.join(subArgs)
         out=Run(strCmd,
                 shell=True,
-                check=True,
+                check=checkCmd is not None,
                 stdout=PIPE,
                 )
-        if pathLog and out.stdout:
-            with open(pathLog, 'w') as fileOut:
-                fileOut.write(out.args)
-                fileOut.write('\n\n')
-                fileOut.write(out.stdout.decode("utf-8"))
+        
+        if checkCmd and not any([checkCmd in lineCur for lineCur in out.stdout.decode("utf-8").split('\n')]):
+            print('strCmd:\n', strCmd)
+            SubLogger('CRITICAL', 'That command returned 0 but the process failed: key={!r}'.format(checkCmd))
+
         return out.returncode
 
     def cam_gen(self, subArgs):
-        fun='cam_gen'
-        if not subArgs: return 1
-        #pathOut=[arg for arg in subArgs if arg.endswith('tif')][0].replace('.tif', '.'+fun)
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('cam_gen', subArgs)
 
     def convert_pinhole_model(self, subArgs):
-        fun='convert_pinhole_model'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd_debug('convert_pinhole_model', subArgs)
 
     def cam2rpc(self, subArgs):
-        fun='cam2rpc'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('cam2rpc', subArgs)
 
     def mapproject(self, subArgs):
-        fun='mapproject'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd('mapproject', subArgs)
 
     def orbitviz(self, subArgs):
-        fun='orbitviz'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('orbitviz', subArgs)
 
     def ipfind(self, subArgs):
-        fun='ipfind'
-        if not subArgs: return 1
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='--output-folder'][0]+'log-long.'+fun
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('ipfind', subArgs)
 
-    def bundle_adjust(self, subArgs):
-        fun='bundle_adjust'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+    def bundle_adjust(self, subArgs, boolConv=True):
+        if boolConv:
+            checkStr='Termination:                      CONVERGENCE'
+        else:
+            checkStr='Termination:                   NO_CONVERGENCE'
+        return self._RunCmd_debug('bundle_adjust', subArgs, checkCmd=checkStr)  
 
-    def parallel_bundle_adjust(self, subArgs):
-        fun='parallel_bundle_adjust'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+    def parallel_bundle_adjust(self, subArgs, boolConv=True):
+        if boolConv:
+            checkStr='Termination:                      CONVERGENCE'
+        else:
+            checkStr='Termination:                   NO_CONVERGENCE'
+        return self._RunCmd('parallel_bundle_adjust', subArgs, checkCmd=checkStr)
 
     def camera_solve(self, subArgs):
-        fun='camera_solve'
-        pathOut=[subArgs[i+1] for i in range(len(subArgs)) if subArgs[i]=='-o'][0]+'log-long.'+fun
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('camera_solve', subArgs)
 
     def stereo_pprc(self, subArgs):
-        fun='stereo_pprc'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd('stereo_pprc', subArgs)
 
     def stereo(self, subArgs):
-        fun='stereo'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('stereo', subArgs)
 
     def parallel_stereo(self, subArgs):
-        fun='parallel_stereo'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd_debug(fun, subArgs, pathOut)
+        return self._RunCmd_debug('parallel_stereo', subArgs)
 
     def point2dem(self, subArgs):
-        fun='point2dem'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('point2dem', subArgs)
 
     def point2las(self, subArgs):
-        fun='point2las'
-        if not subArgs: return 1
-        pathOut=None
-        return self._RunCmd(fun, subArgs, pathOut)
+        return self._RunCmd('point2las', subArgs)
 
 
 

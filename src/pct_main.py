@@ -122,7 +122,7 @@ if __name__ == "__main__":
         # Optional arguments
         parser.add_argument('-b',nargs='+', default=False, help='Block name to process (default: Fasle means all)')
         parser.add_argument('-l', help='Product process level (default: from VarCur)')
-        parser.add_argument('-a', nargs='+', default=['info'], help='Action(s) <info|match|list|create|download> (default: match)')
+        parser.add_argument('-a', nargs='+', default=['info'], help='Action(s) <info|match|list|create|download> (default: info)')
         
 
         argsMain = parser.parse_args()
