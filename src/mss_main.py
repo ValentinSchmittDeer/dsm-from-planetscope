@@ -2,15 +2,18 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
+from datetime import datetime
 from pprint import pprint
 from glob import glob
+import rasterio
 
 # PyValLib packages
 from OutLib.LoggerFunc import *
 from VarCur import *
 from SSBP.blockFunc import SceneBlocks 
-from BlockProc import ASP, MSSFunc, GeomFunc
+from BlockProc import ASP, MSSFunc, GeomFunc, ASfMFunc
 
+from PCT import pipelDFunc
 #-------------------------------------------------------------------
 # Usage
 #-------------------------------------------------------------------
@@ -29,17 +32,7 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-featIdTest=('20210112_180848_0f15',
-'20210112_180847_0f15',
-'20210107_180314_1040',
-'20210107_180316_1040',
-'20210105_180642_0f22',
-'20210105_180643_0f22',
-    )
-featIdTest=('20210112_180848_0f15',
-'20210105_180643_0f22',
-    )
-
+gdInfo='gdalinfo'
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
@@ -56,11 +49,12 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         #Positional input
         parser.add_argument('-i', required=True, help='Working directory')
-        parser.add_argument('-m', required=True, help='Dense matching method PW|MVS')
+        #parser.add_argument('-m', required=True, help='Dense matching method (pw|mvs)')
         parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
         
         #Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
+        parser.add_argument('-epsg', default='32611', help='Current ESPG used by DEM and point cloud creation (default: 32611)')
         #parser.add_argument('-debug',action='store_true',help='Debug mode: avoid planet_common check')
 
         args = parser.parse_args()
@@ -70,7 +64,10 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
         if not os.path.isfile(args.dem): raise RuntimeError("DEM file not found")
-        if not args.m in methodDM: raise RuntimeError("Unknown method")
+        with rasterio.open(args.dem) as fileIn: 
+            if not fileIn.crs==4326: raise RuntimeError("DEM EPSG must be 4326 (WGS 84, geographic)")
+
+        #if not args.m in ('PW', 'MVS'): raise RuntimeError("Unknown method")
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
@@ -98,123 +95,126 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             # Test Mode
             #---------------------------------------------------------------
-            logger.warning('# TEST MODE')
-            lstTemp=[objBlocks.lstBFeat[iB][j] for j in range(objBlocks.lstBId[iB][1]) if objBlocks.lstBFeat[iB][j]['id'] in featIdTest]
-            objBlocks.lstBFeat[iB]=lstTemp
-            objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
-            lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
-            objBlocks.lstBCouple[iB]=lstTemp
+            if 0:
+                featIdTest=('20201225_180508_1003',
+                            '20201225_180507_1003',
+                            '20201220_180803_0f15',
+                            '20201220_180802_0f15',
+                            '20201202_153645_0f21',
+                            '20201202_153644_0f21',
+                            '20201201_180335_103c',
+                            '20201201_180334_103c',
+                            '20201201_153553_1048',
+                            '20201201_153552_1048')
+                logger.warning('# TEST MODE')
+                lstTemp=[objBlocks.lstBFeat[iB][j] for j in range(objBlocks.lstBId[iB][1]) if objBlocks.lstBFeat[iB][j]['id'] in featIdTest]
+                objBlocks.lstBFeat[iB]=lstTemp
+                objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
+                lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
+                objBlocks.lstBCouple[iB]=lstTemp
             
-            ###################
+            #---------------------------------------------------------------
+            # Block Setup
+            #---------------------------------------------------------------
             bId, nbFeat= objBlocks.lstBId[iB]
             logger.info(bId)
             objPath=PathCur(args.i, bId, args.dem)
+
             
             #---------------------------------------------------------------
             # Dense matching pairwise
             #---------------------------------------------------------------
             logger.info('# Dense matching')
+            lstIPair=[j for j in range(len(objBlocks.lstBCouple[iB])) 
+                            if objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2]
 
-            for j in range(len(objBlocks.lstBCouple[iB])):
-                if not objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2: continue
+            logger.warning('Please check stereopair 4 (?) and 8 (asending/decending)')
+            logger.warning('Add filter on asending/decending MD')
+            input('Process?')
+            t0=datetime.now()
+            #procBar=ProcessStdout(name='Dense maching per stereo pair',inputCur=len(lstIPair))
+            for j in lstIPair:
+                #procBar.ViewBar(j)
                 
-                pairCur=objBlocks.lstBCouple[iB][j]
-                
-                # FILTER
-                lstID=pairCur['properties']['scenes'].split(';')
-                
-                #---------------------------------------------------------------
-                # Find Images 
-                #---------------------------------------------------------------
-                lstImgPath=[os.path.join(objPath.pProcData, objPath.extFeat1B.format(idCur)) for idCur in pairCur['properties']['scenes'].split(';')]
-                if False in [os.path.exists(pathCur) for pathCur in lstImgPath]: continue
-                
-                #---------------------------------------------------------------
-                # More images
-                #---------------------------------------------------------------
-                if args.m=='MVS':
-                    lstFuthImgId=MSSlib_stereo.MvsAddImg(pairCur, objBlocks.lstBCouple[iB])
-                    lstOfLst=[glob(os.path.join(pathDict['pProcData'], idCur+'*.tif')) for idCur in lstFuthImgId]
-                    lstImgPath+=[lst[0] for lst in lstOfLst if lst]
-
-                #---------------------------------------------------------------
-                # Find camera
-                #---------------------------------------------------------------
-                lstCamPath=[os.path.join(objPath.pProcData, objPath.nTsai[2].format(objPath.extFeat1B.format(idCur).split('.')[0])) for idCur in pairCur['properties']['scenes'].split(';')]
-                if False in [os.path.exists(pathCur) for pathCur in lstCamPath]: continue
-
-                #input('Ready ?')
-                #---------------------------------------------------------------
-                # Preparation
-                #---------------------------------------------------------------
-                '''
-                There are 2 options:
-                    alignment-method epipolar> +: make use of input geometry -: must shrink the mask using the epipolar transformation parameters
-                    alignment-method affineepipolar> +: automatic relvant mask, better result -: transfo based on new key points
-                '''
-                #subArgs=MSSlib_stereo.StereoParam(lstImgPath, lstCamPath, pathDict['pDm'])                
-                #asp.stereo_pprc(subArgs)
-                #input('pprc OK')
-                #if not os.path.exists(os.path.dirname(pathDict['pDm'])): 
-                #    logger.error('preparation step failed: %i'% i)
-                #    cmd='rm -r %s*'% pathDict['pDm']
-                #    os.system(cmd)
-                #    continue
-                #tileSize1=MSSlib_stereo.OverlapMask(pairCur, pathDict['pDm']+'-lMask.tif', pathDict['pDm']+'-L.tsai', args.dem)
-                #tileSize2=MSSlib_stereo.OverlapMask(pairCur, pathDict['pDm']+'-rMask.tif', pathDict['pDm']+'-R.tsai', args.dem)
-                #
-                #cmd='rm %s*_sub.tif'% pathDict['pDm']
-                #os.system(cmd)
-                #input('mask OK')
+                strId=objBlocks.lstBCouple[iB][j]['properties']['scenes']
+                lstId=sorted(strId.split(';'))
                 
                 #---------------------------------------------------------------
                 # Filter process
                 #---------------------------------------------------------------
-                perfOut=os.path.join(os.path.dirname(objPath.prefDM),'ResultDM')
                 lstNameIn=('-DEM.tif', '-PC.las') #('-DEM.tif', '-IntersectionErr.tif', '-GoodPixelMap.tif', '-F.tif')
-                if os.path.exists(perfOut+lstNameIn[0].replace('.', '%i.'% j)): continue
+                if os.path.exists(objPath.prefStereoDM+lstNameIn[0].replace('.', '%i.'% j)): continue
+                
+                # Stereo pairs
+                if not len(lstId)==2 : continue
+                # Intrack overlap
+                #if not lstId[0].split('_')[-1]==lstId[1].split('_')[-1] : continue
+                
+                #if not j==4: continue
+                #if j>14:
+                #    logger.error('Dt: %s'% str(datetime.now()-t0))
+                #    sys.exit()
+                logger.error('j: %i'% j)
+                #---------------------------------------------------------------
+                # Preparation
+                #---------------------------------------------------------------
+                lstPath=[(os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg)),
+                            os.path.join(objPath.pProcData, objPath.nTsai[2].format(idImg)),
+                            )
+                                for idImg in lstId]
+                epipMode=True
+                prepaProc=MSSFunc.PrepProcessDM( lstPath, 
+                                    objBlocks.lstBCouple[iB][j]['geometry'], 
+                                    objPath.pDem,  
+                                    objPath.prefProcDM,
+                                    epip=epipMode)
+                
+                if prepaProc:
+                    logger.error('Epip images larger than RAM not managed yet')
+                    continue
+                    epipMode=False
+                    prepaProc=MSSFunc.PrepProcessDM( lstPath, 
+                                        objBlocks.lstBCouple[iB][j]['geometry'], 
+                                        objPath.pDem,  
+                                        objPath.prefProcDM,
+                                        epip=False)
+                #input('Ready DM')
                 #---------------------------------------------------------------
                 # Process
-                #---------------------------------------------------------------
-                subArgs=MSSFunc.SubArgs_Stereo(lstImgPath, lstCamPath, objPath.prefDM)                
-                out=asp.parallel_stereo(subArgs)
+                #---------------------------------------------------------------            
+                out=asp.stereo(MSSFunc.SubArgs_Stereo(lstPath, objPath.prefProcDM, epip=epipMode))
                 
-                if out or not os.path.exists(objPath.prefDM+'-PC.tif'): 
+                if out or not os.path.exists(objPath.prefProcDM+'-PC.tif'): 
                     pprint(objBlocks.lstBCouple[iB][j]['properties'])
-                    logger.error("Stereo Failed")
-                    cmd='rm -r %s-*'% objPath.prefDM
+                    logger.error("Stereo failed")
+                    cmd='rm -r %s-*'% objPath.prefProcDM
                     os.system(cmd)
                     continue
                 
-                subArgs=MSSFunc.SubArgs_P2D(objPath.prefDM+'-PC.tif')
-                asp.point2dem(subArgs)
-                subArgs=MSSFunc.SubArgs_P2L(objPath.prefDM+'-PC.tif')
-                asp.point2las(subArgs)
+                asp.point2las(MSSFunc.SubArgs_P2L(objPath.prefProcDM+'-PC.tif', args.epsg))
+                asp.point2dem(MSSFunc.SubArgs_P2D(objPath.prefProcDM+'-PC.tif', args.epsg))
                 
                 #---------------------------------------------------------------
                 # Save Process
                 #---------------------------------------------------------------
                 for nameIn in lstNameIn:
-                    pathIn=objPath.prefDM+nameIn
+                    pathIn=objPath.prefProcDM+nameIn
                     if not os.path.exists(pathIn): 
                         logger.error('File not found (%s): pair %i'% (nameIn, j))
                     else:
                         cmd='mv {} {}'.format(pathIn, 
-                                                    perfOut+nameIn.replace('.', '%i.'% j)
+                                              objPath.prefStereoDM+nameIn.replace('.', '%i.'% j)
                                                     )
                         #print(cmd)
                         os.system(cmd)
-                
-                #input('Stereo Check')
-
+                #input('Next DM')
                 #---------------------------------------------------------------
                 # Clean folder
                 #---------------------------------------------------------------
-                cmd='rm -r %s-*'% objPath.prefDM
-                #print(cmd)
+                # Correlation files
+                cmd='rm -r %s-*'% objPath.prefProcDM
                 os.system(cmd)
-                
-                #input('Next')
+
             
 
     #---------------------------------------------------------------

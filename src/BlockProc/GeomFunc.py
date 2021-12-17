@@ -9,9 +9,15 @@ import logging
 from pprint import pprint
 import numpy as np
 from numpy.linalg import inv, svd, lstsq, det, norm, matrix_rank
+import rasterio
 from sklearn.preprocessing import PolynomialFeatures
 
-
+from importlib.util import find_spec
+checkPlanetCommon=find_spec('planet_opencv3') is not None
+if checkPlanetCommon:
+    from planet_opencv3 import cv2 as cv
+else:
+    import cv2 as cv
 
 
 
@@ -22,7 +28,7 @@ from OutLib.LoggerFunc import *
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['TSAIin', 'RPCin', 'AffineTransfo', 'Geo2Cart_Elli', 'Cart2Geo_Elli']
+__all__ =['TSAIin', 'RPCin', 'AffineTransfo', 'Geo2Cart_Elli', 'Cart2Geo_Elli','MaskedImg']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 
@@ -58,8 +64,9 @@ class TSAIin:
                 __str__(): manage string output
                 __write__(): writtable list
                 _RfromAngles(): update rotation matrix from angles
-                Update(): update class matrices from file attributs (C, R, ...)
-                ApplyDisto(direc, pts): apply distortion model to list of points
+                UpdateTsai(): update class matrices from file attributs (C, R, ...)
+                ApplyDisto(): apply distortion model to list of points
+                Obj2Img(): project geographic points to frame
     '''
     version='4'
     camType='PINHOLE'
@@ -100,16 +107,24 @@ class TSAIin:
             if not 'w_direction' in self.__dir__(): setattr(self, 'w_direction', np.array([0, 0, 1]))
 
     def __str__(self):
-        # Print float values
-        dicOut=dict([(key, getattr(self,key)) for key in self.__dict__ if not type(getattr(self,key))==np.ndarray])
-        # Print file vectors
-        dicOut.update(dict([(key, str(getattr(self,key))) for key in self.__dict__ if type(getattr(self,key))==np.ndarray and not 'mat' in key]))
-        # Print matrix size
-        dicOut.update(dict([(key, 'np.array '+str(getattr(self,key).shape)) for key in self.__dict__ if type(getattr(self,key))==np.ndarray and 'mat' in key]))
-        dicExt=dict([(key, str(getattr(self,key))) for key in self.__dir__() if not key in dicOut and not '_' in key])
         strOut=str(self.__repr__())+':\n\t'
+
+        # float
+        dicFloat=dict([(key, getattr(self,key)) 
+                            for key in self.__dict__ 
+                                if not type(getattr(self,key))==np.ndarray])
+        # array
+        dicArray=dict([(key, str(getattr(self, key).shape)+'=> '+str(getattr(self,key).flatten())) 
+                            for key in self.__dict__ 
+                                if type(getattr(self,key))==np.ndarray])
+        
+        dicExt=dict([(key, str(getattr(self,key))) 
+                        for key in self.__dir__() 
+                            if not key in dicFloat and not key in dicArray and not '_' in key])
+        
         strOut+=json.dumps(dicExt, indent='\t', separators=(',', ':'))
-        strOut+=json.dumps(dicOut, indent='\t', separators=(',', ':'))
+        strOut+=json.dumps(dicFloat, indent='\t', separators=(',', ':'))
+        strOut+=json.dumps(dicArray, indent='\t', separators=(',', ':'))
         return strOut
 
     def __write__(self):
@@ -128,10 +143,15 @@ class TSAIin:
         lstOut+=['pitch = %f\n'% getattr(self,'pitch'),
                  self.distoType+'\n']
         # Distortion
-        if self.distoType=='TSAI':
+        if self.distoType=='NULL':
+            return lstOut
+        elif self.distoType=='TSAI':
             lstTag=('k1', 'k2', 'p1', 'p2')
-        if self.distoType=='Photometrix':
+        elif self.distoType=='Photometrix':
             lstTag=('xp', 'yp', 'k1', 'k2', 'k3', 'p1', 'p2', 'b1', 'b2')
+        else:
+            SubLogger('CRITICAL', 'Distortion model not managed yet for ouput')
+        
         if not all([tag in self.__dir__() for tag in lstTag]): SubLogger('CRITICAL', 'Distortion model incomplet: %s'% self.distoType)
         lstOut+=['%s = %s\n'% (tag, str(getattr(self,tag))) for tag in lstTag]
 
@@ -243,8 +263,29 @@ class TSAIin:
             
             return ptsOut*self.pitch
 
+        elif self.distoType=='NULL':
+            return ptsIn
         else:
             SubLogger('CRITICAL', 'correction impossible, wrong distortion model: %s'% self.distoType)
+
+    def Obj2Img_Geo(self,ptsIn):
+        '''
+        Project geographic points to image frame
+
+        ptsIn (array): point ground coordinates [[Long (L), Lat (P), H], [...]]
+        out:
+            ptsOut (array): point image coordinates [[x, y], [...]]
+        '''
+        if not ptsIn.shape[1]==3: SubLogger('CRITICAL', 'Input points must be 3D')
+        if not 'matP' in self.__dir__():  SubLogger('CRITICAL', 'matrix P missing, please update (UpdateTsai()) the object before')
+        
+        ptsCart=Geo2Cart_Elli(ptsIn)
+        ptsCart_h=np.append(ptsCart, np.ones([ptsIn.shape[0], 1]), axis=1)
+        ptsOut_h=(self.matP@ptsCart_h.T).T
+        ptsOut=ptsOut_h[:, :2]/ptsOut_h[:, [2]]
+        ptsImg=self.ApplyDisto('add', ptsOut)
+        
+        return ptsImg
 
 class RPCin:
     """
@@ -637,7 +678,7 @@ class RPCin:
         matAffine (array 3x3): affine transformation matrix in image plane [default: identity]
         
         out:
-            ptsOut (array nx2: [[x, y], [...]]): points image coordinates
+            ptsOut (array nx2: [[x, y], [...]]): point image coordinates
         '''
         if not 'matRpcCoef' in dir(self): SubLogger('CRITICAL', 'RPC coeff missing')
         
@@ -997,6 +1038,87 @@ def Cart2Geo_Elli(ptCart,elliAF='WGS84',precision=1e-10):
     
     return ptsOut
 
+def MaskedImg(pathImgIn, pathModelIn, pathDemIn, geomIn, pathImgOut=None, buffer=0, debug=False): 
+    '''
+    Mask outside part of the geomatry in the image 
+
+    pathImgIn (str|array): Input image
+    pathModelIn (str|TSAIin|RPCin): Input location model
+    pathDemIn (str): input DEM path
+    geomIn (json): overlap footprint as geojson['geometry'] object
+    pathImgOut (str): output image path (default: None => return image frame)
+    buffer (int): buffer (in pixel) around the area (default: 0)
+        negative value shrinks the area
+    out:
+        create file including mask with extFeatKP extention
+        AND
+        lstPath (tuple): list of path including mask (ImgPath, RpcPath)
+    '''
+    # Input
+    if not os.path.exists(pathDemIn): SubLogger('CRITICAL', 'DEM not found: %s'% pathDemIn)
+
+    if type(pathImgIn)==np.ndarray:
+        img = pathImgIn
+    else:
+        if not os.path.exists(pathImgIn): SubLogger('CRITICAL', 'Image not found: %s'% pathImgIn)
+        img = cv.imread(pathImgIn, cv.IMREAD_LOAD_GDAL)
+    
+    if type(pathModelIn)==TSAIin or type(pathModelIn)==RPCin:
+        objModel=pathModelIn
+    else:
+        if not os.path.exists(pathModelIn): SubLogger('CRITICAL', 'Model not found: %s'% pathModelIn)
+        if pathModelIn.endswith('.tsai'):
+            objModel=TSAIin(pathModelIn)
+        elif pathModelIn.endswith('_RPC.TXT'):
+            objModel=RPCin(pathModelIn)
+        else:
+            SubLogger('CRITICAL', 'Unknown model type: %s'% os.path.basename(pathModelIn))
+
+    if pathImgOut and os.path.exists(pathImgOut): os.remove(pathImgOut)
+
+    # Read DTM
+    demIn=rasterio.open(pathDemIn)
+    demHei=demIn.read(1)
+    matCoordsGeo=np.zeros([len(geomIn['coordinates'][0]), 3])
+    for i, coordCur in enumerate(geomIn['coordinates'][0]):
+        matCoordsGeo[i,:2]=coordCur
+        matCoordsGeo[i,-1]=demHei[demIn.index(coordCur[0], coordCur[1])]
+
+    del demHei
+    demIn.close()
+    
+    # Convert to image coords
+    if type(objModel)==TSAIin:
+        if not objModel.distoType in ('TSAI', 'NULL'): SubLogger('CRITICAL', 'Distortion type cannot be used : %s'% objCam.distoType)
+        matCoordsImg=objModel.Obj2Img_Geo(matCoordsGeo)
+    
+    else:
+        matCoordsImg=objModel.Obj2Img(matCoordsGeo)
+    
+    matCoordsImg=np.round(matCoordsImg).astype(int)
+    
+    # Mask creation
+    mask=np.zeros(img.shape, dtype=np.float32)
+    mask+=cv.fillPoly(np.zeros(img.shape, dtype=np.float32), 
+                      matCoordsImg[np.newaxis, :, :], 
+                      1.0)
+    mask+=cv.polylines(np.zeros(img.shape, dtype=np.float32), 
+                       matCoordsImg[np.newaxis, :, :], 
+                       True,
+                       1.0, 
+                       2*buffer)
+    if not np.any(mask): SubLogger('CRITICAL', 'Area out of frame boundaries')
+    
+    if pathImgOut:
+        if debug:
+            return (cv.imwrite(pathImgOut, img*mask.astype(bool)), matCoordsImg)
+        else:
+            return cv.imwrite(pathImgOut, img*mask.astype(bool))
+    else:
+        if debug:
+            return (img*mask.astype(bool), matCoordsImg)
+        else:
+            return img*mask.astype(bool)
 #=======================================================================
 #main
 #-----------------------------------------------------------------------

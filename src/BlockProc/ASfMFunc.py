@@ -136,52 +136,6 @@ def SubArgs_Ortho(pathImgIn, pathModIn, pathDemIn, pathOrthoOut, epsg=4326):
 
     return subArgs
 
-def MaskStereo(pathObj, sceneId, geomIn):
-    '''
-    Create image with only stereo part visible
-    '''
-    # Path In
-    pathImgIn=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(sceneId))
-    if not os.path.exists(pathImgIn): SubLogger('CRITICAL', 'Image not found: %s'% sceneId)
-    pathRpcIn=os.path.join(pathObj.pData, pathObj.extRpc.format(sceneId))
-    if not os.path.exists(pathRpcIn): SubLogger('CRITICAL', 'Rpc not found: %s'% sceneId)
-
-    # Path Out
-    pathImgOut=os.path.join(pathObj.pProcData, pathObj.extFeatKP.format(sceneId))
-    pathRpcOut=os.path.join(pathObj.pProcData, pathObj.extRpcKP.format(sceneId))
-
-    # Read DTM
-    demIn=rasterio.open(pathObj.pDem)
-    demHei=demIn.read(1)
-    lstCoordsGeo=[]
-    for i, coordCur in enumerate(geomIn['coordinates'][0]):
-        heiCur=demHei[demIn.index(coordCur[0], coordCur[1])]
-        lstCoordsGeo.append(coordCur+[heiCur])
-
-    del demHei
-    demIn.close()
-    matCoordsGeo=np.array(lstCoordsGeo)
-    
-    # Convert to image coords
-    objRpc=GeomFunc.RPCin(pathRpcIn)
-    matCoordsImg=objRpc.Obj2Img(matCoordsGeo)
-    # xMin, yMin, xMax, yMax
-    matBounds=np.clip(np.append(np.amin(matCoordsImg, axis=0), 
-                                np.amax(matCoordsImg, axis=0)).astype(int)+np.array([-1,-1,1,1]), 0, None)
-    
-    # Image creation
-    img = cv.imread(pathImgIn, cv.IMREAD_LOAD_GDAL)
-    mask=np.zeros(img.shape, dtype=np.uint16)
-    mask[matBounds[1]:matBounds[3], matBounds[0]:matBounds[2]]=1
-
-    cv.imwrite(pathImgOut, img*mask)
-
-    # RPC creation
-    cmd='cp %s %s'% (pathRpcIn, pathRpcOut)
-    os.system(cmd)
-
-    return (pathImgOut, pathRpcOut)
-
 def SubArgs_StereoKP_RPC(pathObj, lstPath, softness=0):
     '''
     Create a list of stereo_pprc parameters for key point extraction per pair
@@ -275,7 +229,7 @@ def SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, pathDemIn, pathRpcOut, prefBA=None):
     
     return subArgs
 
-def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'):
+def SubArgs_Camgen(sceneId, pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'):
     '''
     Create a list of cam_gen parameters
 
@@ -302,22 +256,12 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
     strSize=[lineCur.strip('\nSize is').split(',') for lineCur in txtGdal if lineCur.startswith('Size')][0]
     imgShape=(int(strSize[1]), int(strSize[0]))
 
-    if imgShape[0]==2134:
-        heiOffset=-8
-    elif imgShape[0]==2126:
-        heiOffset=-22
-    elif imgShape[0]==2136:
-        heiOffset=-22
-    elif imgShape[0]==2118:
-        heiOffset=-8
-    else:
-        SubLogger('CRITICAL', 'Unknown scene height (%i): %s'% (imgShape[0], os.path.basename(pathImgIn)))
-    
+    matOriOff_pxl=pipelDFunc.ExtractFrameOffset(pathImgIn)
 
     # Circle grid
     if pattern=='circle':
-        x0=camCentre[0]//camPitch
-        y0=camCentre[1]//camPitch+heiOffset
+        x0=camCentre[0]//camPitch+matOriOff_pxl[0]
+        y0=camCentre[1]//camPitch+matOriOff_pxl[1]
         lstPxlPts=[(x0,y0),]
         for rCur in range(ptSpace,ptRadiusFact*ptSpace+1, ptSpace):
             lstPxlPts.append((x0+rCur, y0))
@@ -325,17 +269,24 @@ def SubArgs_Camgen(pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'
             lstPxlPts+=[(x0+int(rCur*cos(alpha)), y0+int(rCur*sin(alpha))) for alpha in np.arange(dAlpha, 2*pi, dAlpha)]
     # Grid  
     else:
-        lstPxlPts=[(wi, hei) for wi in np.linspace(0, 6600, num=11) for hei in np.linspace(0+heiOffset, 4400+heiOffset, num=11)]
+        widthRange=np.linspace(0, 6600, num=11)+matOriOff_pxl[0]
+        heighRange=np.linspace(0, 4400, num=11)+matOriOff_pxl[1]
+        lstPxlPts=[(wiCur, heiCur) for wiCur in widthRange for heiCur in heighRange]
     
     strPxlPts=','.join(['%i %i'% (i,j) for i,j in lstPxlPts])
-    
+
+    # Use distortion centre as PP (like OpenCV method)
+    hardwId=sceneId.split('_')[-1]
+    dictDisto=dict(pipelDFunc.ExtractDisto(hardwId, 'tsai'))
+    camCentre=np.array([dictDisto['cu'], dictDisto['cv']])
+
     # Arguments
     subArgs=[pathImgIn,
             '--input-camera',pathRpcIn,
             '-t', 'rpc',
             '--camera-type', 'pinhole',
             '--reference-dem', pathDemIn,
-            '--optical-center', ' '.join([str(k) for k in camCentre]),
+            '--optical-center', str(camCentre+matOriOff_pxl*camPitch).strip('[]'),
             '--focal-length', str(camFocal),
             '--pixel-pitch', str(camPitch),
             '--pixel-values', '{!r}'.format(strPxlPts), 
@@ -427,7 +378,7 @@ def RPCwithoutDisto(sceneId, pathRpcIn, pathRpcOut):
 
     return 0
 
-def ConvertPM(sceneId, pathCamIn, pathCamOut):
+def ConvertPM(sceneId, pathImgIn, pathCamIn, pathCamOut):
     '''
     Include the right distortin model in a given PM.
     
@@ -439,9 +390,15 @@ def ConvertPM(sceneId, pathCamIn, pathCamOut):
     ''' 
     objCamOut=GeomFunc.TSAIin(pathCamIn)
     
+    # Update distortion model
     hardwId=sceneId.split('_')[-1]
     for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'tsai'):
         setattr(objCamOut, keyNew, valNew)
+
+    # Include origin offset (cropped L1A)
+    matPPUpdated=np.array([objCamOut.cu, objCamOut.cv])+pipelDFunc.ExtractFrameOffset(pathImgIn)*objCamOut.pitch
+    setattr(objCamOut, 'cu', matPPUpdated[0])
+    setattr(objCamOut, 'cv', matPPUpdated[1])
     objCamOut.UpdateTsai()
     
     with open(pathCamOut, 'w') as fileOut:
@@ -449,7 +406,7 @@ def ConvertPM(sceneId, pathCamIn, pathCamOut):
 
     return 0
 
-def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
+def SRS_OCV(sceneId, pathImgIn, pathRpcIn, pathCamOut):
     '''
     Run a spatial resection approximating the input RPC.
     It is based on solvePnP function from OpenCV.
@@ -466,15 +423,14 @@ def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
 
     emptyCam={'fu': camFocal,
               'fv': camFocal,
-              'cu': camCentre[0],
-              'cv': camCentre[1],
+              'cu': objRpcIn.sampOffset*camPitch,
+              'cv': objRpcIn.lineOffset*camPitch,
               'pitch': camPitch,
               'distoType': 'NULL'}
     objCamOut=GeomFunc.TSAIin(emptyCam)
-
+    
     # Update distortion model
-    hardwId=sceneId.split('_')[-1]
-    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'tsai'):
+    for keyNew, valNew in pipelDFunc.ExtractDisto(sceneId, 'tsai', scenePath=pathImgIn):
         setattr(objCamOut, keyNew, valNew)
     
     setattr(objCamOut, 'matK', np.array([[objCamOut.fu, 0           , objCamOut.cu   ],
@@ -487,7 +443,6 @@ def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
                           np.linspace(-0.2, 0.2, num=11)) # H
     matPtsImg_d=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T*objRpcIn.Scale(d=2)+objRpcIn.Offset(d=2)
     matPtsH=meshRange[2].reshape(-1,1)*objRpcIn.heiScale+objRpcIn.heiOffset
-    objRpcIn.Comput_InvRPC()
     matPtsGeo=objRpcIn.Img2Obj_Z(matPtsImg_d,matPtsH)
     matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
     nbPts=matPtsCart.shape[0]
@@ -506,6 +461,25 @@ def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
     setattr(objCamOut, 'C', (-matR.T@vectT).flatten())
     objCamOut.UpdateTsai()
 
+    # Projection control
+    if 0:
+        ptGeo=matPtsGeo[[0,-1], :]
+        print('\nPts Geo:')
+        print(ptGeo)
+        print('RPC:')
+        print(np.round(objRpcIn.Obj2Img(ptGeo), 1))
+        
+        ptCart=matPtsCart[[0, -1], :]
+        ptImg_h=(objCamOut.matP@np.append(ptCart, np.ones([2,1]), axis=1).T).T
+        ptImg=ptImg_h[:,:2]/ptImg_h[:,[2]]
+        ptImg_d=objCamOut.ApplyDisto('add', ptImg)
+        print('PM:')
+        print(np.round(ptImg_d, 1))
+
+        print('||Centre||:')
+        print(norm(objCamOut.C))
+        sys.exit()
+    
     with open(pathCamOut, 'w') as fileOut:
         fileOut.writelines(objCamOut.__write__())
 

@@ -273,11 +273,9 @@ def GraphEO(dicTsai, argsCur):
         graph.text(matPts[0,0]+args.s, matPts[0,1]+args.s, matPts[0,2]+args.s,str(i))
 
         # Camera orientation Init
-        vect=np.array([[0],[0],[100]])*argsCur.s
-        vectR=lstCur[0].matR@vect
         if argsCur.ori: graph.quiver(matSclPts[0,0], matSclPts[0,1], matSclPts[0,2],
-                                  vectR[0], vectR[1], vectR[2],
-                                  length=50, color='r')
+                                  lstCur[0].matR[-1, 0], lstCur[0].matR[-1, 1], lstCur[0].matR[-1, 2],
+                                  length=argsCur.s*100, color='r')
 
         # Camera journey
         graph.plot(matSclPts[:,0], matSclPts[:,1], matSclPts[:,2],'k--')
@@ -291,10 +289,9 @@ def GraphEO(dicTsai, argsCur):
             # Camera centre BA
             graph.plot(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],'o', color=lstColours[j],label=labelStr)
             # Camera orientation BA 
-            vectR=lstCur[j].matR@vect
             if argsCur.ori: graph.quiver(matSclPts[j,0], matSclPts[j,1], matSclPts[j,2],
-                                      vectR[0], vectR[1], vectR[2],
-                                      length=50,color='k')
+                                      lstCur[j].matR[-1, 0], lstCur[j].matR[-1, 1], lstCur[j].matR[-1, 2],
+                                      length=argsCur.s*100,color='k')
         
     #Earth shape
     set_axes_equal(graph)
@@ -386,6 +383,8 @@ if __name__ == "__main__":
 
         #Optional arguments
         parser.add_argument('-pref', default='',help='Additional prefix')
+        parser.add_argument('-tsai',help='Tsai file format (default: {}_1Init.tsai')
+
         parser.add_argument('-table',action='store_true',help='Return the table')
         parser.add_argument('-longTable',action='store_true',help='Long table version')
         parser.add_argument('-io', action='store_true', help='Tabe: print intrinsic parameter differences (focal, PP)')
@@ -419,10 +418,10 @@ if __name__ == "__main__":
         prefix+='-'#.tsai'
         prefix+=args.pref
 
+        if not args.tsai: args.tsai=objTemp.nTsai[1]
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
         print()
-
 
         #---------------------------------------------------------------
         # Read BA
@@ -431,7 +430,7 @@ if __name__ == "__main__":
             logger.info('# Read BA')
             logger.info('Prefix: %s'% prefix)
 
-            objBa=ReadBA(args.init, objTemp.nTsai[1], prefix)
+            objBa=ReadBA(args.init, args.tsai, prefix)
             
             lstBaName=[]
             for pathBA in args.ba+args.cam:

@@ -48,7 +48,7 @@ __all__ =[# SSBP
           #'factConstSat',
           'gsdOrth',
           ## MSS
-          'methodDM',
+          
 
           ]
 
@@ -149,6 +149,7 @@ class PathCur:
 
         # Files
         self.pDem=pathDem
+        self.pDemGrad=os.path.join(self.pB, 'DEM_Gradient_DoG.tif')
         self.pStereoLst=os.path.join(self.pB, '{}_Stereo.txt'.format(bId))
         #self.pOrbit=os.path.join(self.pB,'%s_InitialCam.kml'% bId)
         self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
@@ -165,8 +166,11 @@ class PathCur:
         self.nTsai=('{}_0Rough.tsai', 
                     '{}_1Init.tsai',
                     '{}_2Adj.tsai',
-                    '{}_3Bal.tsai',
+                    '{}_3Epi.tsai',
                     )
+        self.extFeatEpip='{}_Epip.tif'
+        self.extFeatEpipMask='{}-mask.tif'.format(self.extFeatEpip[:-4])
+
         # Prefix
         self.prefStereoKP= os.path.join(pathDir, bId, 'ASP_StereoKeyPoints','SKP')
         self.prefKP= os.path.join(pathDir, bId, 'ASP_KeyPoints','KP')
@@ -174,7 +178,8 @@ class PathCur:
         self.prefIO= os.path.join(pathDir, bId, 'ASP_Intrinsic','IO')
         self.prefFix=os.path.join(pathDir, bId, 'ASP_Fix','FIX')
 
-        self.prefDM= os.path.join(pathDir, bId, 'ASP_DenseMatch', 'DM')
+        self.prefStereoDM= os.path.join(pathDir, bId, 'ASP_StereoDenseMatch_Test', 'SDM')
+        self.prefProcDM= os.path.join(pathDir, bId, 'ASP_StereoDenseMatch_Test', 'DMproc')
 
     def __str__(self):
       return json.dumps(self.__dict__, indent='\t', separators=(',', ':'))
@@ -193,4 +198,3 @@ camPitch=5.5e-3
 gsdOrth=4
 
 ## MSS
-methodDM=('PW', 'MVS')

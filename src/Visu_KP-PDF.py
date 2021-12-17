@@ -61,13 +61,13 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         # Read
         #---------------------------------------------------------------
-        logger.info(os.path.basename(args.t))
+        logger.info(os.path.basename(os.path.dirname(args.t)))
         with open(args.t) as fileIn:
             objGeojsonTrue=json.load(fileIn)['Features']
         matTrue=np.array([item['geometry']['coordinates'] for item in objGeojsonTrue])
 
         for pathCur in args.p:
-            logger.info(os.path.basename(pathCur))
+            logger.info(os.path.basename(os.path.dirname(pathCur)))
             with open(pathCur) as fileIn:
                 objGeojsonProj=json.load(fileIn)['Features']
              
@@ -81,7 +81,6 @@ if __name__ == "__main__":
                 matDiff=np.sum(matPts, axis=2)[:,:,np.newaxis]
             else:
                 matDiff=np.append(matDiff, np.sum(matPts, axis=2)[:,:,np.newaxis], axis=2)
-        print(matDiff)
         
         #---------------------------------------------------------------
         # Stats

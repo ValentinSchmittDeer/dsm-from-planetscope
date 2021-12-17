@@ -157,7 +157,7 @@ class AspPython():
         return self._RunCmd('stereo', subArgs)
 
     def parallel_stereo(self, subArgs):
-        return self._RunCmd_debug('parallel_stereo', subArgs)
+        return self._RunCmd('parallel_stereo', subArgs)
 
     def point2dem(self, subArgs):
         return self._RunCmd('point2dem', subArgs)

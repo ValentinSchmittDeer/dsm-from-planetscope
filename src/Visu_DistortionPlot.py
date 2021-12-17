@@ -31,7 +31,9 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-
+k1Rem_pxl = -3.94502713e-10
+k1Add_pxl = 4.00255009e-10
+k1Add_N = 4.00255009e-10*699**2/5.5e-3**2
 
 #-----------------------------------------------------------------------
 # Hard command
@@ -46,45 +48,54 @@ def AddDisto(ptsU, k1, k2, p1, p2, PP=np.array([18.15, 12.1]), f=699):
 
     return ptsU+ptsOff*(dRad+dTang)
 
-def AddConfig(ptsU, k1, dPP=None, PP=None):
+def AddConfig(ptsU, k1, PP=None):
     
-    if not dPP is None:
-        print(np.round(np.array([3300.0, 2200.0])-dPP, 2))
-        ptsOff=ptsU-(np.array([3300.0, 2200.0])-dPP)
-    elif not PP is None:
-        print(np.round(PP/5.5e-3, 2))
+    if not PP is None:
         ptsOff=ptsU-PP/5.5e-3
     r2Off=np.square(norm(ptsOff, axis=1))[:,np.newaxis]
 
     return ptsU+ptsOff*k1*r2Off
 
-def PolarPlot(ptsU, lstPtsD):
-    fig, graph = plt.subplots()
+def SatPlot(PP1, PP2, PP3, i, c):
+    txtoff=5
+    if c=='b':
+        col=(mcolors.CSS4_COLORS['deepskyblue'], mcolors.CSS4_COLORS['royalblue'])
+    elif c=='r':
+        col=(mcolors.CSS4_COLORS['lightcoral'], mcolors.CSS4_COLORS['firebrick'])
+    elif c=='g':
+        col=(mcolors.CSS4_COLORS['limegreen'], mcolors.CSS4_COLORS['darkgreen'])
 
-    lstColours=list(mcolors.TABLEAU_COLORS.values())
-    lstLabel=('Basics', 
-            'PP config 1048', 
-            'PP adjust 1048',
-            #'PP config 0f22', 
-            #'PP adjust 0f22',
-            #'PP config 0f15',
-            #'PP adjust 0f15',
-            'PP config 103c',
-            'PP adjust 103c',
-            )
-    rU=norm(ptsU-np.array([3300.0, 2200.0]), axis=1)
-    for i in range(1, len(lstPtsD)):
-        rD=norm(lstPtsD[i]-np.array([3300.0, 2200.0]), axis=1)
-        if 'config' in lstLabel[i]:
-            sym='.'
-        else:
-            sym='x'
-        graph.plot(rU, rD-rU, sym, color=lstColours[(i+1)//2], label=lstLabel[i])
+    if not i:
+        nameCur='Sat %s, Planet disto'% Sat
+    else:
+        nameCur=''
+
+    rD=norm(AddConfig(pts_pxl_u, k1Add_pxl, PP=PP1)-centre, axis=1)
+    graph.plot(rU, rD-rU, '--', color=col[0], label=nameCur)
+    graph.text(rU[0]+txtoff, rD[0]-rU[0], txt, color=col[0])
+    txtoff+=5
+
+    if not i:
+        nameCur='Sat %s, Refined disto'% Sat #from Tsai PP 
+    else:
+        nameCur=''
     
-    rD=norm(lstPtsD[0]-np.array([3300.0, 2200.0]), axis=1)
-    graph.plot(rU, rD-rU, 'k+', label=lstLabel[0])
-    graph.legend()   
-    plt.show()
+    rD=norm(AddConfig(pts_pxl_u, k1Add_pxl, PP=PP2)-centre, axis=1)
+    graph.plot(rU, rD-rU, '-', color=col[1], label=nameCur)
+    graph.text(rU[0]+txtoff, rD[0]-rU[0], txt, color=col[1])
+    txtoff+=5
+
+    if not i:
+        nameCur='Sat %s, Refined disto'% Sat #from centre
+    else:
+        nameCur=''
+    
+    rD=norm(AddConfig(pts_pxl_u, k1Add_pxl, PP=PP3)-centre, axis=1)
+    #graph.plot(rU, rD-rU, '-', color=col[1], label=nameCur)
+    #graph.text(rU[0]+txtoff, rD[0]-rU[0], txt, color=col[1])
+    txtoff+=5
+    
+    
 #=======================================================================
 #main
 #-----------------------------------------------------------------------
@@ -99,60 +110,66 @@ if __name__ == "__main__":
 
 
         #args = parser.parse_args()
+        fig, graph = plt.subplots()
+        
 
-        meshRange=np.meshgrid(np.linspace(0, 6600, num=50), # x
-                              np.linspace(0, 4400, num=50)) # y
-        pts_pxl_u=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T
+        lstBounds=( (0, 3300, 0, 2200, 'TL'),
+                    (0, 3300, 4400, 2200, 'BL'),
+                    (6600, 3300, 0, 2200, 'TR'),
+                    (6600, 3300, 4400, 2200, 'BR'))
+        # 1048: -22
+        # 0f15: -8
+        # 1003: -8
+        Sat='1003'
+        offset=np.array([0, -8])
 
-        #---------------------------------------------------------------
-        # Basics
-        #---------------------------------------------------------------
-        k1Rem_pxl = -3.94502713e-10
-        k1Add_pxl = 4.00255009e-10
-        k1Add_N = 4.00255009e-10*699**2/5.5e-3**2
+        for i, tupCur in enumerate(lstBounds):
+            print('-------------')
+            xMin, xMax, yMin, yMax, txt=tupCur
+            pts_pxl_u=np.vstack((np.linspace(xMin, xMax, num=50)-offset[0],
+                                 np.linspace(yMin, yMax, num=50)-offset[1])).T
+            centre=np.array([3300.0, 2200.0])-offset
+            rU=norm(pts_pxl_u-centre, axis=1)
 
-        lstPts_d=[]
-        # Basics
-        lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0))
-        # K1 OCV 
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.193, 0, 0, 0))
-        # K1 ASP
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.155, 0, 0, 0))
-        # K1,P1,P2 OCV CamWei 20
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N+0.253, 0, -3.197e-4, -1.035e-4))
-        # PP Adjust
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0, PP=np.array([18.16467731, 12.354787059])))
-        #print(np.array([18.16467731, 12.354787059])/5.5e-3)
-        # Focal
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0, f=698.9823494966))
-        # P1,P2 without K1
-        #lstPts_d.append(AddDisto(pts_pxl_u, k1Add_N, 0, -3.197e-4, -1.035e-4))
-        print('Ref\n'+str(np.array(['X', 'Y']))+'\n'+str(np.array([3300.0, 2200.0])))
-        # PP config 1048
-        print('Sat 1048')
-        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([-9.39572, -51.23698])))
-        # PP adjust 1048
-        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.20009441098933, 12.530117372677196])))
-        # PP config 0f22
-        #print('Sat 0f22')
-        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([11.77371, -78.89346])))
-        # PP adjust 0f22
-        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.08367266598664, 12.684050052174625])))
-        # PP config 0f15
-        #print('Sat 0f15')
-        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, dPP=np.array([-19.51245, 18.34829])))
-        # PP adjust 0f15
-        #lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, PP=np.array([18.255731584720117, 12.142814090967438])))
-        # PP config 103c
-        print('Sat 103c')
-        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, np.array([-48.14095, 6.91236])))
-        # PP adjust 103c
-        lstPts_d.append(AddConfig(pts_pxl_u, k1Add_pxl, np.array([18.413174648888521, 12.206465117990133])))
+            if not i: 
+                rD=norm(AddDisto(pts_pxl_u, k1Add_N, 0, 0, 0)-centre, axis=1)
+                graph.plot(rU, rD-rU, 'k-.', label='Reference')
 
+            #---------------------------------------------------------------
+            # Basics
+            #---------------------------------------------------------------
+            
+            
+            # PP config 1048
+            if '1048' in Sat: SatPlot(np.array([18.20167646, 12.26080339]),
+                                    np.array([18.200815257490785, 12.466116650818485]),
+                                    np.array([18.164650863728347, 12.289035064263382]),
+                                    i,
+                                    'b')
+            
+            # PP config 0f15
+            if '0f15' in Sat: SatPlot(np.array([18.257318475, 11.955084405]),
+                                    np.array([18.256454639818841, 12.155278249112426]),
+                                    np.array([18.164650863728347, 12.368027943464341]),
+                                    i,
+                                    'r')
 
-        PolarPlot(pts_pxl_u, lstPts_d)
+            # PP config 1003
+            if '1003' in Sat: SatPlot(np.array([18.31432559, 11.99389972]),
+                                    np.array([18.313459057557928, 12.194743545899009]),
+                                    np.array([18.164650863728347, 12.368027943464341]),
+                                    i,
+                                    'g')
+            
 
+        graph.set_title('Distortion adjustment along 4 diagonals')
+        graph.set_xlabel('Radius [pxl]')
+        graph.set_ylabel('Distortion [pxl]')
+        plt.xlim([3850, 3990])
+        plt.ylim([23, 26])
 
+        graph.legend()   
+        plt.show()
         #---------------------------------------------------------------
         # Step
         #---------------------------------------------------------------
