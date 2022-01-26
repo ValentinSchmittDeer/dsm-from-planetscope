@@ -119,6 +119,13 @@ def MakeFiter(argsDic,nameSearch):
                         "field_name": "gsd",
                         "config": {"lte": argsDic[key]}
                         }
+        
+        elif key=='sunElevation':
+            if not argsDic[key]: continue
+            filterNew= {"type": "RangeFilter",
+                      "field_name": "sun_elevation",
+                      "config": { "gte": argsDic[key] }
+                    }
 
         else:
             SubLogger('CRITICAL', 'Unknown key %s'% key)

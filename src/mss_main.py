@@ -6,12 +6,14 @@ from datetime import datetime
 from pprint import pprint
 from glob import glob
 import rasterio
+import json
+from multiprocessing import Pool
 
 # PyValLib packages
 from OutLib.LoggerFunc import *
 from VarCur import *
 from SSBP.blockFunc import SceneBlocks 
-from BlockProc import ASP, MSSFunc, GeomFunc, ASfMFunc
+from BlockProc import DockerLibs, MSSFunc, GeomFunc, ASfMFunc
 
 from PCT import pipelDFunc
 #-------------------------------------------------------------------
@@ -32,11 +34,19 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
-gdInfo='gdalinfo'
+global procBar
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
 
+def FailedDM(pathFile, lstPrefClean=None):
+    #logger.error('%s failed'% os.path.basename(pathFile))
+    with open(pathFile, 'w') as fileOut:
+        fileOut.write('Failed')
+
+    if lstPrefClean: os.system(cmd='rm' +'-* '.join(lstPrefClean)+'-* ')
+
+    
 #=======================================================================
 #main
 #-----------------------------------------------------------------------
@@ -51,10 +61,10 @@ if __name__ == "__main__":
         parser.add_argument('-i', required=True, help='Working directory')
         #parser.add_argument('-m', required=True, help='Dense matching method (pw|mvs)')
         parser.add_argument('-dem', required=True, help='Reference DEM path (SRTM)')
+        parser.add_argument('-epsg', required=True, help='Current ESPG used by output projection')
         
         #Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: [] means all')
-        parser.add_argument('-epsg', default='32611', help='Current ESPG used by DEM and point cloud creation (default: 32611)')
         #parser.add_argument('-debug',action='store_true',help='Debug mode: avoid planet_common check')
 
         args = parser.parse_args()
@@ -67,156 +77,354 @@ if __name__ == "__main__":
         with rasterio.open(args.dem) as fileIn: 
             if not fileIn.crs==4326: raise RuntimeError("DEM EPSG must be 4326 (WGS 84, geographic)")
 
-        #if not args.m in ('PW', 'MVS'): raise RuntimeError("Unknown method")
+        pathAoi=glob(os.path.join(args.i,'*_AOI.geojson'))[0]
+        if not os.path.isfile(pathAoi): raise RuntimeError("Incorrect block, AOI file not found")
+        with open(pathAoi) as fileIn:
+            jsonAoi=json.load(fileIn)
+            if not jsonAoi['crs']['properties']['name']=="urn:ogc:def:crs:OGC:1.3:CRS84": raise RuntimeError("AOI shape must be 4326 (WGS 84, geographic)")
+            geomAoi=jsonAoi['features'][0]
+            geomAoiLoc=MSSFunc.ReprojGeom(geomAoi, args.epsg)
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
 
         #---------------------------------------------------------------
-        # ASP Python interface
+        # Docker Python interface
         #---------------------------------------------------------------
-        #if not args.debug:
-        logger.info('# ASP Python interface')        
-        asp=ASP.AspPython()
+        logger.info('# Docker Python interface')        
+        asp=DockerLibs.AspPython()
+        pdal=DockerLibs.PdalPython()
+        gdal=DockerLibs.GdalPython()
         
         #---------------------------------------------------------------
-        # Read Block
+        # Read Repo
         #---------------------------------------------------------------
-        logger.info('# Read Block')
-        objBlocks=SceneBlocks([], args.i, 'dir')
-        logger.info(objBlocks)
-        
-        if not args.b:
-            lstLoop=range(objBlocks.nbB)
-        else:
-            lstLoop=[i for i in range(objBlocks.nbB) if objBlocks.lstBId[i][0] in args.b]
-        
-        for iB in lstLoop:
-            #---------------------------------------------------------------
-            # Test Mode
-            #---------------------------------------------------------------
-            if 0:
-                featIdTest=('20201225_180508_1003',
-                            '20201225_180507_1003',
-                            '20201220_180803_0f15',
-                            '20201220_180802_0f15',
-                            '20201202_153645_0f21',
-                            '20201202_153644_0f21',
-                            '20201201_180335_103c',
-                            '20201201_180334_103c',
-                            '20201201_153553_1048',
-                            '20201201_153552_1048')
-                logger.warning('# TEST MODE')
-                lstTemp=[objBlocks.lstBFeat[iB][j] for j in range(objBlocks.lstBId[iB][1]) if objBlocks.lstBFeat[iB][j]['id'] in featIdTest]
-                objBlocks.lstBFeat[iB]=lstTemp
-                objBlocks.lstBId[iB]=(objBlocks.lstBId[iB][0], len(lstTemp))
-                lstTemp=[objBlocks.lstBCouple[iB][j] for j in range(len(objBlocks.lstBCouple[iB])) if not False in [idCur in featIdTest for idCur in objBlocks.lstBCouple[iB][j]['properties']['scenes'].split(';')]]
-                objBlocks.lstBCouple[iB]=lstTemp
-            
+        logger.info('# Read Repo')
+        logger.info(geomAoi['properties']['NAME'])
+        objInfo=SceneBlocks([], args.i, 'info')
+        if not objInfo.nbB: raise RuntimeError('No block available')
+
+        #---------------------------------------------------------------
+        # Loop per block
+        #---------------------------------------------------------------
+        logger.info('# Action per block')
+        if args.b:
+            lstBId=[objInfo.lstBId.index(blockCur) for blockCur in objInfo.lstBId if blockCur[0] in args.b]
+        else: 
+            lstBId=range(objInfo.nbB)
+
+        for iB in lstBId:
+            if 'objBlocks' in locals(): del objBlocks, objPath
             #---------------------------------------------------------------
             # Block Setup
             #---------------------------------------------------------------
-            bId, nbFeat= objBlocks.lstBId[iB]
-            logger.info(bId)
-            objPath=PathCur(args.i, bId, args.dem)
+            nameB, nbFeat=objInfo.lstBId[iB]
+            logger.info('%s (%i scenes)'% objInfo.lstBId[iB])
+            objBlocks=SceneBlocks([], args.i, 'dir', b=nameB)
+            objPath=PathCur(args.i, nameB, geomAoi['properties']['NAME'])
 
+            MSSFunc.PdalJson(objPath)
             
             #---------------------------------------------------------------
             # Dense matching pairwise
             #---------------------------------------------------------------
             logger.info('# Dense matching')
-            lstIPair=[j for j in range(len(objBlocks.lstBCouple[iB])) 
-                            if objBlocks.lstBCouple[iB][j]['properties']['nbScene']==2]
+            # Stereo pairs
+            lstIPair=[j for j in range(len(objBlocks.lstBCouple[0])) 
+                            if objBlocks.lstBCouple[0][j]['properties']['nbScene']==2]
 
-            logger.warning('Please check stereopair 4 (?) and 8 (asending/decending)')
-            logger.warning('Add filter on asending/decending MD')
-            input('Process?')
-            t0=datetime.now()
-            #procBar=ProcessStdout(name='Dense maching per stereo pair',inputCur=len(lstIPair))
+            procBar=ProcessStdout(name='Dense maching per stereo pair',inputCur=len(lstIPair))
             for j in lstIPair:
-                #procBar.ViewBar(j)
-                
-                strId=objBlocks.lstBCouple[iB][j]['properties']['scenes']
+                procBar.ViewBar(j)
+                strJ=str(j).rjust(5,'0')
+
+                strId=objBlocks.lstBCouple[0][j]['properties']['scenes']
                 lstId=sorted(strId.split(';'))
                 
                 #---------------------------------------------------------------
                 # Filter process
                 #---------------------------------------------------------------
-                lstNameIn=('-DEM.tif', '-PC.las') #('-DEM.tif', '-IntersectionErr.tif', '-GoodPixelMap.tif', '-F.tif')
-                if os.path.exists(objPath.prefStereoDM+lstNameIn[0].replace('.', '%i.'% j)): continue
+                # Exists
+                pathPCout=objPath.prefStereoDM+objPath.extPC.format(strJ)
+                if os.path.exists(pathPCout): continue
                 
-                # Stereo pairs
-                if not len(lstId)==2 : continue
-                # Intrack overlap
-                #if not lstId[0].split('_')[-1]==lstId[1].split('_')[-1] : continue
+                # Ascending/Descending
+                #lstSatAz=[]
+                #for idCur in lstId:
+                #    for i in range(nbFeat):
+                #        featCur=objBlocks.lstBFeat[0][i]
+                #        if not idCur==featCur['id']: continue
+                #        if not 'sat:satellite_azimuth_mean_deg' in featCur['properties']: continue
+                #        lstSatAz.append(featCur['properties']['sat:satellite_azimuth_mean_deg'])
+                #if len(lstSatAz)==2:
+                #    lstSatAzDiff=[[abs(az-azRef)//satAz_Tol for azRef in satAz_Val] for az in lstSatAz]
+                #    if not all([0 in tup for tup in lstSatAzDiff]): raise RuntimeError('Input satellite azimut not interpreted (stereopair %i): %s (+/-%i)'% (j, str(lstSatAz), satAz_Tol))
+                #    setSatOri=set([satAz_Name[tup.index(0)] for tup in lstSatAzDiff])
+                #    
+                #    #if not len(setSatOri)==1: continue
+                #    #if 'ascending' in setSatOri: continue
                 
-                #if not j==4: continue
-                #if j>14:
-                #    logger.error('Dt: %s'% str(datetime.now()-t0))
-                #    sys.exit()
-                logger.error('j: %i'% j)
+                #logger.info('j: %i'% j)
+                #if not input('Ready? (1/0)'): continue
+                #if not j in (0,1,2,3,4,5): continue
+                #if 0:
                 #---------------------------------------------------------------
-                # Preparation
+                # Left or Right Ref
                 #---------------------------------------------------------------
-                lstPath=[(os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg)),
-                            os.path.join(objPath.pProcData, objPath.nTsai[2].format(idImg)),
+                if glob(objPath.prefProcDM+'*'): os.system('rm %s*'% objPath.prefProcDM)
+                tupPref=(objPath.prefProcDM+'Left', objPath.prefProcDM+'Right')
+                tupLstPath=([(os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg)),
+                                                      os.path.join(objPath.pProcData, objPath.nTsai[2].format(idImg)),
+                                                        )
+                                                            for idImg in lstId],
+                            [(os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg)),
+                                                       os.path.join(objPath.pProcData, objPath.nTsai[2].format(idImg)),
+                                                        )
+                                                            for idImg in sorted(lstId, reverse=True)]
                             )
-                                for idImg in lstId]
-                epipMode=True
-                prepaProc=MSSFunc.PrepProcessDM( lstPath, 
-                                    objBlocks.lstBCouple[iB][j]['geometry'], 
-                                    objPath.pDem,  
-                                    objPath.prefProcDM,
-                                    epip=epipMode)
-                
-                if prepaProc:
-                    logger.error('Epip images larger than RAM not managed yet')
-                    continue
-                    epipMode=False
-                    prepaProc=MSSFunc.PrepProcessDM( lstPath, 
-                                        objBlocks.lstBCouple[iB][j]['geometry'], 
-                                        objPath.pDem,  
-                                        objPath.prefProcDM,
-                                        epip=False)
-                #input('Ready DM')
                 #---------------------------------------------------------------
-                # Process
-                #---------------------------------------------------------------            
-                out=asp.stereo(MSSFunc.SubArgs_Stereo(lstPath, objPath.prefProcDM, epip=epipMode))
-                
-                if out or not os.path.exists(objPath.prefProcDM+'-PC.tif'): 
-                    pprint(objBlocks.lstBCouple[iB][j]['properties'])
-                    logger.error("Stereo failed")
-                    cmd='rm -r %s-*'% objPath.prefProcDM
-                    os.system(cmd)
+                # Epipolar images
+                #---------------------------------------------------------------
+                #if 0:
+                epipMode=True
+                prepaProc=MSSFunc.EpipPreProc( tupLstPath[0], 
+                                            objBlocks.lstBCouple[0][j]['geometry'], 
+                                            args.dem,  
+                                            tupPref[0],
+                                            epip=epipMode,
+                                            )
+                    
+                # Does not attempt though matches yet
+                if prepaProc:
+                    FailedDM(pathPCout)
                     continue
+
+                #---------------------------------------------------------------
+                # Disparities
+                #---------------------------------------------------------------
+                out=0
+                for i in range(2):
+                    prefOut=tupPref[i]
+                    lstPath=tupLstPath[i]
+                    
+                    out+=asp.parallel_stereo(MSSFunc.SubArgs_Stereo(lstPath, prefOut, epip=epipMode)+['--stop-point', '5',]) 
+                    
+                    if out: break
+                    
+                    nameImgASP=(('-L.tif', '-L.tsai', '-lMask.tif', '-L_sub.tif', '-lMask_sub.tif'),
+                             ('-R.tif', '-R.tsai', '-rMask.tif', '-R_sub.tif', '-rMask_sub.tif'))[::1-2*i]
+                    cmd=[]
+                    for k in range(2):
+                        for l in range(5):
+                            ext=''
+                            if not k: ext='tmp'
+                            cmd.append('mv %s %s'% (tupPref[i]+nameImgASP[k][l], tupPref[(i-1)%2]+nameImgASP[(k-1)%2][l]+ext))
+                    cmd+=['mv %s %s'% (cmd[l].split()[-1], cmd[l].split()[-1][:-3]) for l in range(5)]
+                    os.system(' ; '.join(cmd))
+                    
+                if out: 
+                    FailedDM(pathPCout, lstPrefClean=tupPref)
+                    continue
+                #---------------------------------------------------------------
+                # merge Disparities
+                #---------------------------------------------------------------
+                prefOut=tupPref[0]
+                lstPath=tupLstPath[0]
+
+                pathDispMean=MSSFunc.MergeDisparities(tupPref[0], tupPref[1])
+                if not pathDispMean: 
+                    FailedDM(pathPCout, lstPrefClean=tupPref)
+                    continue
+                gdal.gdal_translate(['-if', '"EXR"', pathDispMean.replace('.tif','.exr'), pathDispMean])
                 
-                asp.point2las(MSSFunc.SubArgs_P2L(objPath.prefProcDM+'-PC.tif', args.epsg))
-                asp.point2dem(MSSFunc.SubArgs_P2D(objPath.prefProcDM+'-PC.tif', args.epsg))
+                out=asp.parallel_stereo(MSSFunc.SubArgs_Stereo(lstPath, prefOut, epip=epipMode)+['--entry-point', '5',])
+                
+                pathPC=prefOut+'-PC.tif'
+                if not os.path.exists(pathPC): 
+                    FailedDM(pathPCout, lstPrefClean=tupPref)
+                    continue
+
+                #asp.point2dem(MSSFunc.SubArgs_P2D(pathPC, args.epsg))        
+                #os.system('mv %s %s'% (prefOut+'-DEM.tif', objPath.prefStereoDM+'-DEM-%i.tif'% j,))
                 
                 #---------------------------------------------------------------
                 # Save Process
                 #---------------------------------------------------------------
-                for nameIn in lstNameIn:
-                    pathIn=objPath.prefProcDM+nameIn
-                    if not os.path.exists(pathIn): 
-                        logger.error('File not found (%s): pair %i'% (nameIn, j))
-                    else:
-                        cmd='mv {} {}'.format(pathIn, 
-                                              objPath.prefStereoDM+nameIn.replace('.', '%i.'% j)
-                                                    )
-                        #print(cmd)
-                        os.system(cmd)
-                #input('Next DM')
+                pathTxt=MSSFunc.AspPc2Txt(pathPC)
+                if type(pathTxt)==int: 
+                    FailedDM(pathPCout, lstPrefClean=tupPref)
+                    continue
+                
+                subArgs=[objPath.pJsonSource,
+                         '--readers.text.filename=%s'% pathTxt,
+                         '--writers.las.filename=%s'% pathPCout,
+                         '--filters.reprojection.out_srs="EPSG:%s"'% args.epsg,
+                         '--stage.source.value="PointSourceId=%i"'% (j+1),
+                         '--stage.angle.value="ScanAngleRank=%i"'% int(round(MSSFunc.BRratio(lstPath[0][1], lstPath[1][1], atype='deg'))),
+                         ]
+                pdal.pipeline(subArgs)
+                
                 #---------------------------------------------------------------
                 # Clean folder
                 #---------------------------------------------------------------
-                # Correlation files
-                cmd='rm -r %s-*'% objPath.prefProcDM
+                cmd='rm ' +'-* '.join(tupPref)+'-* '
                 os.system(cmd)
-
             
 
+               
+            #---------------------------------------------------------------
+            # Point cloud summary
+            #---------------------------------------------------------------
+            logger.warning('# Point cloud summary')
+
+            lstPCpath=glob(objPath.prefStereoDM+objPath.extPC.format('*'))
+            lstPCpath.sort()
+            nbFile=len(lstPCpath)
+
+            procBar=ProcessStdout(name='Summary computation',inputCur=len(lstPCpath))
+            lstPCiEmpty=[]
+            nbPts, lstBounds=0, False
+            for i in range(nbFile):
+                procBar.ViewBar(i)
+                
+                pathPc=lstPCpath[i]
+                
+                # Exists
+                fileEncode=os.popen('file --mime-encoding %s'% pathPc).read()
+                if not fileEncode.strip().split(':')[-1]==' binary':
+                    lstPCiEmpty.append(i)
+                    continue
+
+                # Nb points
+                jsonInfo=pdal.info(['--summary', pathPc])
+                if type(jsonInfo)==int or not jsonInfo['summary']['num_points']:
+                    lstPCiEmpty.append(i)
+                    continue
+                nbPts+=jsonInfo['summary']['num_points']
+
+                # Boundaries
+                bnds=jsonInfo['summary']['bounds']
+                if not lstBounds:
+                    lstBounds=[bnds['minx'], bnds['miny'], bnds['maxx'], bnds['maxy']]
+                else:
+                    lstBounds[0]=min(lstBounds[0],bnds['minx'])
+                    lstBounds[1]=min(lstBounds[1],bnds['miny'])
+                    lstBounds[2]=max(lstBounds[2],bnds['maxx'])
+                    lstBounds[3]=max(lstBounds[3],bnds['maxy'])
+
+            [lstPCpath.pop(i-j) for j,i in enumerate(lstPCiEmpty)]
+            
+            checkMerged, coordMid=MSSFunc.PC_Summary(lstPCpath, lstPCiEmpty, lstBounds, nbPts, objPath.pPcFullList)
+            
+            #---------------------------------------------------------------
+            # Point cloud tiling
+            #---------------------------------------------------------------
+            grepTile=objPath.pPcFullTile.replace('#', '*')
+            if not checkMerged:
+                logger.info('# Point cloud tiling')
+                with open(objPath.pPcFullList, 'w') as fileOut:
+                    fileOut.writelines([line+'\n' for line in lstPCpath])
+
+                # Clear folder
+                if glob(grepTile): os.system('rm %s'% grepTile)
+                
+                # Link to correct files
+                prefLink=os.path.join(objPath.pPcFullDir, os.path.basename(objPath.prefStereoDM))
+                [os.system('ln -s %s %s'% (pathPC, pathPC.replace(objPath.prefStereoDM, prefLink))) 
+                            for pathPC in lstPCpath]
+                
+                subArgs=['"%s*"'% prefLink,
+                         '"%s"'% objPath.pPcFullTile,
+                         '--out_srs="EPSG:%s"'% args.epsg,
+                         '--length', '1000', # cell length
+                         '--buffer', str(2*gsdDsm+gsdDsm/2),
+                         '--origin_x', str(coordMid[0]),
+                         '--origin_y', str(coordMid[1]),
+                         ]
+                pdal.tile(subArgs)
+                
+                os.system('rm %s*'% prefLink)
+            
+            if os.path.exists(objPath.pPcFullTile.replace('#', '0_0')):
+                MSSFunc.FilterTiles(coordMid, 
+                                    glob(grepTile), 
+                                    objPath.pPcFullTile,
+                                    geomAoiLoc)
+            
+            lstTilePath=glob(grepTile)
+            lstTilePath.sort()
+            nbTile=len(lstTilePath)
+            logger.info('%i point cloud tiles'% nbTile)
+            
+            raise RuntimeError("Point coud processes - Check parallel processes and gobal var")
+            #---------------------------------------------------------------
+            # Point cloud filtering
+            #---------------------------------------------------------------
+            logger.warning('# Point cloud filtering')
+
+            strTemplate=objPath.pPcFullTile.split('#')
+            procBar=ProcessStdout(name='filtering per tile',inputCur=nbTile//os.cpu_count()+nbTile%os.cpu_count())
+            def Filtering(i):
+                procBar.ViewBar(i)
+                pathIn=lstTilePath[i]
+                strIndexIn=pathIn.replace(strTemplate[0],'').replace(strTemplate[1],'')
+                pathOut=objPath.pPcFltTile.format(strIndexIn)
+                if os.path.exists(pathOut): return 0
+
+                subArgs=[objPath.pJsonFilter,
+                        '--readers.las.filename=%s'% pathIn,
+                        '--writers.las.filename=%s'% pathOut]
+                return pdal.pipeline(subArgs)
+            
+            os.system('date')
+            with Pool(None) as poolCur:
+                poolCur.map(Filtering, list(range(nbTile)))
+                print()
+            os.system('date')
+
+            lstTilePath=glob(objPath.pPcFltTile.format('*'))
+            lstTilePath.sort()
+            nbTile=len(lstTilePath)
+            sys.exit()
+            #---------------------------------------------------------------
+            # Point cloud rasterize
+            #---------------------------------------------------------------
+            logger.warning('# Point cloud merging')
+            
+            strTemplate=objPath.pPcFltTile.split('{}')
+            
+            procBar=ProcessStdout(name='Rasterizing per tile',inputCur=nbTile//os.cpu_count()+nbTile%os.cpu_count())
+            def RasterizeTiles(i):
+                global strTemplate, procBar, lstTilePath, objPath, pdal, MSSFunc
+                if j: time.sleep((os.getpid()-os.getppid())%2)
+                procBar.ViewBar(i)
+                pathIn=lstTilePath[i]
+                strIndexIn=pathIn.replace(strTemplate[0],'').replace(strTemplate[1],'')
+                pathOut=objPath.pDsmTile.format(strIndexIn)
+                if os.path.exists(pathOut): return 0
+                indexIn=[int(s) for s in strIndexIn.split('_')]
+            
+                return MSSFunc.PC2Raster( pathIn, 
+                                          pathOut,
+                                          indexIn,
+                                          objPath.pJsonRast_WA,
+                                          pdal)
+
+            os.system('date')
+            with Pool(None) as poolCur:
+                poolCur.map(RasterizeTiles, list(range(nbTile)))
+                print()
+            os.system('date')
+
+            #---------------------------------------------------------------
+            # Tile merge
+            #---------------------------------------------------------------
+            lstTilePath=glob(objPath.pDsmTile.format('???_????'))
+            gdal.gdal_merge(['-init', '"-32767 -32767 0"',
+                             '-a_nodata', '-32767', 
+                             '-o', objPath.pDsmFinal,
+                             ]+lstTilePath)
+            
     #---------------------------------------------------------------
     # Exception management
     #---------------------------------------------------------------

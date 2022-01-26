@@ -4,6 +4,7 @@
 
 import os, sys, logging, time
 from datetime import datetime
+from math import floor
 import logging
 from termcolor import colored
 
@@ -161,7 +162,7 @@ class ProcessStdout:
         self (ProcessStdout object):
     '''
     
-    def __init__(self, name='Process', mode='bar', inputCur=None, lengthBar=None):
+    def __init__(self, name='Process', mode='bar', inputCur=None, lengthBar=50):
         self.startTime=datetime.now()
         self.name=name
         if not inputCur: 
@@ -171,14 +172,13 @@ class ProcessStdout:
             if type(inputCur)==int and inputCur>0:
                 self.iMax=inputCur
             else:
-                self.Error('In bar mode, inputCur must a interger above 0')
-            if lengthBar:
-                self.lenBar=lengthBar
-            else:
-                self.lenBar=50
+                self.Error('In "bar" mode, inputCur must a interger above 0')
+            self.lenBar=lengthBar
             strOut='|{obj.name}{0}|  %  T-spent   T-left   T-total'.format(' '*(self.lenBar-len(name)),
                                                           obj=self)
             print(strOut)
+            # Multiprocess
+            self.i=0
         
         elif mode=='list':
             if type(inputCur)==list:
@@ -186,10 +186,7 @@ class ProcessStdout:
             else:
                 self.Error('In list mode, inputCur must be a list')
             self.iMax=len(inputCur)
-            if lengthBar:
-                self.lenBar=lengthBar
-            else:
-                self.lenBar=30
+            self.lenBar=lengthBar
     
     def Error(self, msg):
         print(colored("ProcessStdout Error: ", "red", attrs=["blink"]), msg)
@@ -197,7 +194,10 @@ class ProcessStdout:
         sys.exit()
     
     def ViewBar(self,i):
-        ratio=(i+1)/self.iMax
+        # Multiprocessing
+        self.i+=1
+
+        ratio=min(self.i/self.iMax, 1)
         
         tSpent=(datetime.now()-self.startTime).total_seconds()
         tTotal=tSpent/ratio
@@ -211,11 +211,7 @@ class ProcessStdout:
                                    tLeft//3600,tLeft%3600//60,tLeft%60,
                                    tTotal//3600,tTotal%3600//60,tTotal%60,
                                    )
-        if ratio==1:
-            endCur='\n'
-        else:
-            endCur=''
-        print (strOut, end=endCur)
+        print (strOut, end=''+'\n'*int(ratio==1))
         sys.stdout.flush()
     
     def ViewList(self,i):

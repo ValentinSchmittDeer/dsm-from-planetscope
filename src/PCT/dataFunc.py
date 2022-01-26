@@ -32,7 +32,8 @@ class PCTBucket:
     '''
     Local python object for bucket management. It embeds planet_comon commannds 
     for Storage and Job System management.
-
+    
+    nameAoi (str): AOI name
     nameBlock (str): block name
     pathSceneID (str): scene id file
     out:
@@ -57,10 +58,10 @@ class PCTBucket:
             sizeClo (int): from the cloud, byte weight of the dataset
             lstCloData (list of list): list with (sceneName.tif, size, sceneName.RPC, size, sceneName.json, size ...)
     '''
-    def __init__(self, nameBlock, levelCur, lstFeat, pathWorkDir):        
+    def __init__(self, nameAoi, nameBlock, levelCur, lstFeat, pathWorkDir):        
         # Descriptor
         self.bId=nameBlock
-        self.nameBuck=nameBucket.format(nameBlock, levelCur)
+        self.nameBuck=nameBucket.format(nameAoi, nameBlock, levelCur)
         self.tupleLevel=dicLevel[levelCur]
         
         if not lstFeat: SubLogger('CRITICAL', 'lstFeat is empty')
@@ -82,7 +83,7 @@ class PCTBucket:
                 self.lstLocFeat.append(nameFeat)
                 self.sizeLoc+=os.path.getsize(pathCur)
         else:
-            self.sizeLoc=-1
+            self.sizeLoc=0
         self.nbLocFeat=len(self.lstLocFeat)
 
 
@@ -126,12 +127,16 @@ class PCTBucket:
             self.nbCloFeat=len(self.lstCloFeat)
         except HTTPError:
             self.exists=False
+            self.nbCloFeat=0
+            self.sizeClo=0
+        except IndexError:
+            self.exists=True
             self.nbCloFeat=-1
             self.sizeClo=-1
 
     def __str__(self):
         #ljust(
-        strOut='{obj.nameBuck} (exist: {obj.exists})\n'.format(obj=self)
+        strOut='{obj.nameBuck} (exists: {obj.exists})\n'.format(obj=self)
         strOut+='       |   Descr  |   Cloud  |   Local  |\n'
         strOut+='Nb Feat|{obj.nbDescFeat:^10d}|{obj.nbCloFeat:^10d}|{obj.nbLocFeat:^10d}|\n'.format(obj=self)
         

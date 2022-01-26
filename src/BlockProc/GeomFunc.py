@@ -349,7 +349,7 @@ class RPCin:
     def __init__(self, pathCur=None):
         if pathCur and not os.path.isfile(pathCur): 
             print(self.__doc__)
-            SubLogger('CRITICAL', 'pathCur does not exists')
+            SubLogger('CRITICAL', 'RPC path does not exists')
         self.path=pathCur
         
         if pathCur and pathCur.split('.')[-1] in ['xml', 'XML']:
@@ -364,8 +364,10 @@ class RPCin:
         elif pathCur and pathCur.endswith('_RPC.TXT'):
             self.src=pathCur.split('.')[-1]
             self.Read_RpcTxt()
-        else:
+        elif pathCur is None:
             self.src='Built-in'
+        else:
+            SubLogger('CRITICAL', 'Unknown RPC format (available: .XML, .tif, .RPB, _RPC.TXT): %s'% os.path.basename(pathCur))
     
     def __str__(self):
         strOut=str(self.__repr__())+':\n\t'
@@ -386,7 +388,8 @@ class RPCin:
         fileType ('txt'): define the writting method and tag names
         out:
             lstOut (list): writable list of string
-        ''' 
+        '''
+
         if fileType=='txt':
             tagTable=(('lineOffset', 'LINE_OFF'),
                       ('sampOffset', 'SAMP_OFF'),
@@ -400,7 +403,7 @@ class RPCin:
                       ('heiScale'  , 'HEIGHT_SCALE'),
                       )
             lstOut=['{}: {}\n'.format(tag, self.__getattribute__(key)) for key,tag in tagTable]
-        
+            
             matRpcCoef=self.matRpcCoef[:, self.iCoef_Sklearn2RPC]
             m=len(self.iCoef_Sklearn2RPC)
             lstOut+=['LINE_NUM_COEFF_{}: {}\n'.format(j+1, matRpcCoef[2,j]) for j in range(m)]
@@ -570,7 +573,7 @@ class RPCin:
             RPCin (obj):
         '''
         roundImg=0
-        roundGrd=5
+        roundGrd=4
         roundHei=0
 
         self.sampOffset=np.round(offset[0], roundImg)
@@ -640,7 +643,8 @@ class RPCin:
                 matInvCoef (array): inverse RPC coefficient
         '''
         lstRequi=('lineOffset', 'sampOffset', 'latOffset', 'longOffset', 'heiOffset', 'lineScale', 'sampScale', 'latScale', 'longScale', 'heiScale')
-        if not all([keyCur in self.__dir__() for keyCur in lstRequi]): SubLogger('CRITICAL', 'Normalisation parameters missing')
+        lstQuery=[keyCur in self.__dir__() for keyCur in lstRequi]
+        if not all(lstQuery): SubLogger('CRITICAL', 'Normalisation parameters missing: %s'% (lstRequi[lstQuery.index(False)]))
         
         if not type(orderPoly)==int and not 0<orderPoly<4: SubLogger('CRITICAL', 'Wrong polynomial order')
         
@@ -772,8 +776,9 @@ class RPCin:
         '''
         
         lstKeys=dir(self)
-        lstReq=('lineOffset', 'sampOffset', 'latOffset', 'longOffset', 'heiOffset', 'lineScale', 'sampScale', 'latScale', 'longScale', 'heiScale')
-        if not all([req in self.__dir__() for req in lstReq]): SubLogger('CRITICAL', 'Normalisation parameters missing')
+        lstRequi=('lineOffset', 'sampOffset', 'latOffset', 'longOffset', 'heiOffset', 'lineScale', 'sampScale', 'latScale', 'longScale', 'heiScale')
+        lstQuery=[keyCur in self.__dir__() for keyCur in lstRequi]
+        if not all(lstQuery): SubLogger('CRITICAL', 'Normalisation parameters missing: %s'% (lstRequi[lstQuery.index(False)]))
         
         if not pts2D.shape[0]==pts3D.shape[0]: SubLogger('CRITICAL', 'Different input point number')
         
@@ -967,6 +972,7 @@ def Geo2Cart_Elli(ptGeo,elliAF='WGS84'):
     if not ptGeo.ndim==2: SubLogger('CRITICAL', 'ptGeo must be 2D, [[Long (L), Lat (P), H], [...]]')
     nbPts,ndCoords=ptGeo.shape
     if not ndCoords==3: SubLogger('CRITICAL', 'ptGeo must be 3 components [Long (L), Lat (P), H]')
+    if not -360<np.amin(ptGeo[:,:2])<360 or not -360<np.amax(ptGeo[:,:2])<360: SubLogger('CRITICAL', 'ptGeo (Long (L), Lat (P)) must be in degree [-360, 360]')
     radRatio=np.append(np.ones([nbPts,ndCoords-1])*pi/180,np.ones([nbPts,1]),axis=1)
     ptsIn=ptGeo*radRatio
     
@@ -1107,18 +1113,64 @@ def MaskedImg(pathImgIn, pathModelIn, pathDemIn, geomIn, pathImgOut=None, buffer
                        True,
                        1.0, 
                        2*buffer)
-    if not np.any(mask): SubLogger('CRITICAL', 'Area out of frame boundaries')
+    if not np.any(mask): 
+        SubLogger('ERROR', 'Area out of frame boundaries: %s\nCoords Geo:\n%s\nCoords Img:\n%s'% (os.path.basename(pathImgIn), str(matCoordsGeo), str(matCoordsImg)) )
+        return 1
     
-    if pathImgOut:
-        if debug:
-            return (cv.imwrite(pathImgOut, img*mask.astype(bool)), matCoordsImg)
-        else:
-            return cv.imwrite(pathImgOut, img*mask.astype(bool))
+
+    if pathImgOut: 
+        out=cv.imwrite(pathImgOut, img*mask.astype(bool))
+        if not type(out)==bool or not out: SubLogger('CRITICAL', 'Masked image creation error : %s'% os.path.basename(pathImgIn))
     else:
-        if debug:
-            return (img*mask.astype(bool), matCoordsImg)
-        else:
-            return img*mask.astype(bool)
+        out=img*mask.astype(bool)
+    
+    if debug:
+        return (out, matCoordsImg)
+    else:
+        return out
+
+def Alti2ElliH(ptGeo, pathGeoid, eh2a=False):
+    '''
+    Apply geoid on geographic coordinates. It adds the geoid or applies 
+    the opposite opperation with 'eh2a'
+    
+    ptGeo (array: [[Long (L), Lat (P), H], [...]]): geographic coordinates with H=altitude (or elli. hei. with 'eh2a')
+    pathGeoid (str): raster geoid path
+    eh2a (bool): reverse operation marker
+    out:
+        ptGeo (array: [[Long (L), Lat (P), H], [...]]): geographic coordinates with H=ellipsoidal height (or reverse)
+    '''
+    if not os.path.exists(pathGeoid): SubLogger('CRITICAL', 'Geoid file not found')
+    if not ptGeo.ndim==2: SubLogger('CRITICAL', 'ptGeo must be 2D, [[Long (L), Lat (P), H], [...]]')
+    nbPts,ndCoords=ptGeo.shape
+    if not ndCoords==3: SubLogger('CRITICAL', 'ptGeo must be 3 components [Long (L), Lat (P), H]')
+    
+    with rasterio.open(pathGeoid) as imgIn:
+        if not imgIn.crs=='EPSG:4326': SubLogger('CRITICAL', 'Geoid file must be in geographic coordinates (EPSG 4326)')
+        matIndex=np.array([imgIn.index(longCur,latCur) for longCur, latCur, heightCur in ptGeo], dtype=int)
+        imgGeoid=imgIn.read(1)
+        imgBnd=imgIn.bounds
+    
+    try:
+        geoidVal=imgGeoid[matIndex[:,1], matIndex[:,0]]
+    except IndexError:
+        print()
+        print('  |  '.join([' '*5, '  Long ', '   Lat  ', 'x(col)', 'y(row)']))
+        print('  |  '.join(['Min'.rjust(5),]+np.round(np.min(ptGeo[:,:2],axis=0), 5).astype(str).tolist()+np.min(matIndex,axis=0).astype(str).tolist()))
+        print('  |  '.join(['Max'.rjust(5),]+np.round(np.max(ptGeo[:,:2],axis=0), 5).astype(str).tolist()+np.max(matIndex,axis=0).astype(str).tolist()))
+        print('Image', imgBnd)
+        print('Image PixelBox', imgGeoid.shape)
+        with open(pathGeoid[:-4]+'_ptsBesides.txt', 'w') as fileOut:
+            fileOut.writelines(['; '.join(coords)+'\n' for coords in ptGeo.astype(str).tolist()])
+        SubLogger('CRITICAL', 'Geographic coordinates go beyond geoid coverage')
+    
+    if eh2a: geoidVal*=-1
+
+    ptGeo[:,-1]+=geoidVal
+    
+    return ptGeo
+
+
 #=======================================================================
 #main
 #-----------------------------------------------------------------------

@@ -12,6 +12,7 @@ from numpy.linalg import norm, inv, det, matrix_rank
 from scipy.signal import gaussian
 import rasterio
 from shapely.geometry import Polygon
+import pyproj
 from pprint import pprint
 
 
@@ -24,7 +25,7 @@ else:
 
 from OutLib.LoggerFunc import *
 from VarCur import *
-from BlockProc import GeomFunc
+from BlockProc import GeomFunc, DockerLibs
 from PCT import pipelDFunc
 
 #-----------------------------------------------------------------------
@@ -34,12 +35,26 @@ __author__='Valentin Schmitt'
 __version__=1.0
 __all__ =[]
 SetupLogger(name=__name__)
-#SubLogger(logging.WARNING, 'jojo')
+#SubLogger('ERROR', 'Hello')
 
 gdTrans='gdal_translate'
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
+def ReprojGeom(featIn, epsgOut):
+    coordIn=np.array(featIn['geometry']['coordinates']).reshape(-1,2)
+    coordsLong, coordsLat=coordIn.T
+
+    wgs84=pyproj.Proj(init='epsg:4326')
+    utm=pyproj.Proj(init='epsg:%s'% epsgOut)
+    coordsX, coordsY = pyproj.transform(wgs84, utm, coordsLong, coordsLat)
+    
+    coordOut=np.append(coordsX[:,np.newaxis], coordsY[:,np.newaxis], axis=1)[np.newaxis,np.newaxis,:,:]
+    featOut=featIn.copy()
+    featOut['geometry']['coordinates']=coordOut.tolist()
+
+    return featOut
+
 def GardDEM(pathIn, pathOut):
     fileIn=rasterio.open(pathIn)
     
@@ -57,7 +72,7 @@ def GardDEM(pathIn, pathOut):
         fileOut.write(imgOut.astype(np.float32), 1)
     return 0
 
-def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
+def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
     '''
     Packed function for dense matching preparation. It can create 
     epipolar images or simply enhanced images (radiometry).
@@ -69,37 +84,32 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
         0 (int): 
     '''
     margin=20
-    with os.popen("awk '/MemFree/ {print $0}' /proc/meminfo") as meminfo:
+    with os.popen("awk '/MemAvailable/ {print $0}' /proc/meminfo") as meminfo:
         cmdOut=meminfo.read().split()
         dicFact={'kB': 1024, 'B':1, 'MB': 1024**2, 'GB': 1024**3}
         sizeFreeMem=int(cmdOut[1])*dicFact[cmdOut[2]]
 
     def _PrepaRadioImg(i):
+        lstImg[i]=lstImg[i].astype(np.float32, copy=False)
+
         # Copy kernel
         kernShape=11
         kernMid=int(kernShape//2)
         kernCopy=np.zeros([kernShape, kernShape], dtype=np.float32)
         kernCopy[kernMid, kernMid]=1
         # DoG kernel
-        matGausOut=cv.getGaussianKernel(  kernShape, 2)
+        gaussSig=3
+        matGausOut=cv.getGaussianKernel(  kernShape, gaussSig)
         matGausOut*=1/matGausOut.sum()
-        matGausIn=cv.getGaussianKernel(  kernShape, 2*1.6)
+        matGausIn=cv.getGaussianKernel(  kernShape, gaussSig*1.6)
         matGausIn*=1/matGausIn.sum()
         kernDoG=2*(np.outer(matGausOut, matGausOut)-np.outer(matGausIn, matGausIn))
-        # Laplace kernel
-        kernLap=np.zeros(kernDoG.shape, dtype=float)
-        kernLap[[kernMid-1, kernMid+1], [kernMid-1, kernMid+1]]=-1
-        kernLap[kernMid, kernMid]=4
-        
         # Convolution
-        kernFull=(kernCopy+kernDoG+kernLap)
-        
-        lstImg[i]=lstImg[i].astype(np.float32, copy=False)
+        kernFull=(kernCopy+kernDoG)
         cv.filter2D(src=lstImg[i], 
                    ddepth=-1, 
                    kernel=kernFull,
                    dst=lstImg[i])
-        np.clip(lstImg[i], 0, None, out=lstImg[i])
 
         # Enhancement
         imgData=lstImg[i][np.where(lstImg[i]>0)]
@@ -114,6 +124,8 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
         lstImg[i]*=a
         lstImg[i]+=b
         
+        np.clip(lstImg[i], 0, None, out=lstImg[i])
+
         # Mask
         lstImg[i]=GeomFunc.MaskedImg(  lstImg[i],
                                     lstCamIn[i], 
@@ -185,6 +197,7 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
         lstMask[i]=imgCur.astype(bool, copy=False)
 
     def EpipFrameParam():
+        # Epipolar parameters
         matCornTransf=np.zeros([2,4,1,2])
         for i in range(2):
             matT=lstCamOut[i].matP[:3,:3]@inv(lstCamIn[i].matP[:3,:3])
@@ -207,47 +220,44 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
         vectOff=minusMinCornProj-np.ones(2)
         vectSize=maxCornProj+minusMinCornProj
         
-        if vectSize[0]*vectSize[1]*32>sizeFreeMem/2:
-            nbPts=len(geomIn['coordinates'][0])
-            matPtsTransf=np.zeros([2,nbPts,1,2])
-            for i in range(2):
-                matT=lstCamOut[i].matP[:3,:3]@inv(lstCamIn[i].matP[:3,:3])
-
-                a, matPtsImg=GeomFunc.MaskedImg(lstMask[i], 
-                                                lstCamIn[i], 
-                                                pathDem, 
-                                                geomIn, 
-                                                debug=True)
-                del a
-                matPtsImg_u=cv.undistortPoints(  matPtsImg.reshape(nbPts,1,2).astype(float), 
-                                                lstCamIn[i].matK, 
-                                                (lstCamIn[i].k1, lstCamIn[i].k2, lstCamIn[i].p1, lstCamIn[i].p2), 
-                                                np.eye(3), 
-                                                lstCamIn[i].matK)
-                matPtsTransf[i]=cv.perspectiveTransform(matPtsImg_u,
-                                                        matT)
-            
-            minPtsTransf=np.floor(np.amin(matPtsTransf, axis=(2,1,0))).astype(int)
-            maxPtsTransf=np.ceil(np.amax(matPtsTransf, axis=(2,1,0))).astype(int)
-            offsetPts=-minPtsTransf
-            sizePts=maxPtsTransf-minPtsTransf
-            # Shrink x dim
-            vectOff[0]=offsetPts[0]-margin
-            vectSize[0]=sizePts[0]+2*margin
-            # Shrink y dim
-            vectSize[1]=maxPtsTransf[1]+vectOff[1]+margin
-
+        ## Shrink image size
+        #nbPts=len(geomIn['coordinates'][0])
+        #matPtsTransf=np.zeros([2,nbPts,1,2])
+        #for i in range(2):
+        #    matT=lstCamOut[i].matP[:3,:3]@inv(lstCamIn[i].matP[:3,:3])
+        #
+        #    a, matPtsImg=GeomFunc.MaskedImg(lstMask[i], 
+        #                                    lstCamIn[i], 
+        #                                    pathDem, 
+        #                                    geomIn, 
+        #                                    debug=True)
+        #    del a
+        #    matPtsImg_u=cv.undistortPoints(  matPtsImg.reshape(nbPts,1,2).astype(float), 
+        #                                    lstCamIn[i].matK, 
+        #                                    (lstCamIn[i].k1, lstCamIn[i].k2, lstCamIn[i].p1, lstCamIn[i].p2), 
+        #                                    np.eye(3), 
+        #                                    lstCamIn[i].matK)
+        #    matPtsTransf[i]=cv.perspectiveTransform(matPtsImg_u,
+        #                                            matT)
+        #
+        #minPtsTransf=np.floor(np.amin(matPtsTransf, axis=(2,1,0))).astype(int)
+        #maxPtsTransf=np.ceil(np.amax(matPtsTransf, axis=(2,1,0))).astype(int)
+        #offsetPts=-minPtsTransf
+        #sizePts=maxPtsTransf-minPtsTransf
+        ## Shrink x dim
+        #vectOff[0]=offsetPts[0]-margin
+        #vectSize[0]=sizePts[0]+2*margin
+        ## Shrink y dim
+        #vectSize[1]=maxPtsTransf[1]+vectOff[1]+margin
+        
         if vectSize[0]*vectSize[1]*32<sizeFreeMem/2:
-            #print('vectOff', vectOff)
-            #print('vectSize', vectSize)
-            #print('Image weight', vectSize[0]*vectSize[1]*32/1024**3)
             return vectOff, vectSize
         else:
             return False, False
 
     if not len(lstIn)==2: SubLogger('CRITICAL', 'lstIn must be of length 2 (stereo pair)')
     if not os.path.exists(os.path.dirname(prefOut)): os.mkdir(os.path.dirname(prefOut))
-    if glob(prefOut+'-*'): os.system('rm %s'% (prefOut+'*'))
+    #if glob(prefOut+'-*'): os.system('rm -f %s'% (prefOut+'*'))
 
     nameASP=(('-L.tif', '-L.tsai', '-lMask.tif', '-L_sub.tif', '-lMask_sub.tif'),
              ('-R.tif', '-R.tsai', '-rMask.tif', '-R_sub.tif', '-rMask_sub.tif'))
@@ -259,10 +269,17 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
     # Epipolar 
     if epip:
         epipXaxis=(lstCamIn[1].vectX0-lstCamIn[0].vectX0).flatten()
-        epipZaxis=((lstCamIn[1].matR[-1, :]+lstCamIn[0].matR[-1, :])/2).flatten()
+        epipXaxis*=1/norm(epipXaxis)
+        epipZaxis=0.5*(lstCamIn[0].matR[-1, :]+lstCamIn[1].matR[-1, :])
+        epipZaxis*=1/norm(epipZaxis)
         
-        r1=epipXaxis/norm(epipXaxis)
-        r2=np.cross(epipZaxis, r1)
+        axisAngle=np.arccos(np.abs(np.vdot(epipXaxis, epipZaxis)))*180/pi
+        #if axisAngle<80: 
+        #    SubLogger('ERROR', 'Axis angle above 80°: %2f'% axisAngle)
+        #    return 1
+
+        r1=epipXaxis
+        r2=np.cross(epipZaxis, epipXaxis)
         r3=np.cross(r1, r2)
         epipR=np.vstack((r1/norm(r1), 
                          r2/norm(r2), 
@@ -273,7 +290,9 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
         lstCamOut=[_PrepaEpipCam(i) for i in range(2)]
         
         epipOff, epipSize=EpipFrameParam()
-        if type(epipOff)==bool and not epipOff: return 1
+        if type(epipOff)==bool and not epipOff: 
+            SubLogger('ERROR', 'Epipolar image too large')
+            return 1
         # S: Shift
         epipS=np.eye(3)
         epipS[:2, -1]=epipOff
@@ -317,8 +336,9 @@ def PrepProcessDM(lstIn, geomIn, pathDem, prefOut, epip=False):
 def SubArgs_Stereo(lstPath, prefOut, epip=False):
     # Arguments
     subArgs=['-t', 'nadirpinhole', # mode
-             #'-e', '1', # starting point 1:Preprocessing, 2:Disparity, 3:Blend, 4:Sub-pixel Refinement, 5:Outlier Rejection and Hole Filling, 6:Triangulation
+             #'--entry-point', '1', # starting point 1:Preprocessing, 2:Disparity, 3:Blend, 4:Sub-pixel Refinement, 5:Outlier Rejection and Hole Filling, 6:Triangulation
              #'--stop-point', '1', # Stop the stereo pipeline 
+             '--nodata-value', '0',
              ]
     
     ## Preprocessing
@@ -331,8 +351,8 @@ def SubArgs_Stereo(lstPath, prefOut, epip=False):
              #'--individually-normalize', # image radio normalisation
              #'--ip-per-tile', '1000', # key point extraction number per tile (case of alignement method)
              '--ip-num-ransac-iterations', '1000', 
-             '--ip-detect-method', '1', # key point algorithm 0:OBAlgG, 1:SIFT, 2:ORB (case of alignement method)
-             '--nodata-value', '0',
+             '--ip-detect-method', '0', # key point algorithm 0:OBAlgG, 1:SIFT, 2:ORB (case of alignement method)
+             '--disable-tri-ip-filter', '1', # disable the triangulation filtering
              #'--force-reuse-match-files', # # use former match file: ?using -o prefix?
              '--skip-rough-homography', # avoid the datum-based homography 
              #'--ip-debug-images 1', # Print image with key points on: written at process root (in docker)
@@ -366,6 +386,42 @@ def SubArgs_Stereo(lstPath, prefOut, epip=False):
 
     return subArgs
 
+def MergeDisparities(prefLeft, prefRight, thresh=1):
+    extFiltered='-F.tif'
+    pathDispLeft=prefLeft+extFiltered
+    pathDispRight=prefRight+extFiltered
+    if not os.path.exists(pathDispLeft) or not os.path.exists(pathDispRight): SubLogger('CRITICAL', 'Disparities images not found')
+    
+    imgDispLeft = cv.imread(pathDispLeft, cv.IMREAD_LOAD_GDAL)
+    imgDispRight= cv.imread(pathDispRight, cv.IMREAD_LOAD_GDAL)
+    if not imgDispLeft.shape==imgDispRight.shape: SubLogger('CRITICAL', 'Disparities images with different size: %s VS %s'% (str(imgDispLeft.shape), str(imgDispRight.shape)))
+    r,c,b=imgDispLeft.shape
+    
+    # Right image shift
+    medLeft, medRight=np.median(imgDispLeft[imgDispLeft[:,:,0]==1,2]), np.median(imgDispRight[imgDispRight[:,:,0]==1,2])
+    if int(medLeft+medRight): 
+        SubLogger('ERROR', 'Disparitiy median above 1 pixels: %.2f'% (medLeft+medRight))
+        return False
+    shift=int(round(0.5*(medLeft-medRight)))
+    if shift<0:
+        imgDispRight=np.append(np.zeros([r,-shift,b], dtype=np.float32), imgDispRight[:,:shift,:], axis=1)
+    else:
+        SubLogger('WARNING', 'Positive disparitiy case, please check it')
+        imgDispRight=np.append(imgDispRight[:,shift:,:], np.zeros([r,shift,b], dtype=np.float32), axis=1)
+    
+    # Disparity mask
+    matOut=np.repeat((imgDispLeft[:,:,0]*imgDispRight[:,:,0])[:,:,np.newaxis], 3, axis=2).astype(np.float32)
+    # Disparity mean
+    matOut[:,:,1:]*=0.5*(imgDispLeft[:,:,1:]-imgDispRight[:,:,1:])
+    # Disparitiy difference (filtered out)
+    threshDispI=np.abs(norm(imgDispLeft[:,:,1:]+imgDispRight[:,:,1:], axis=2))>thresh
+    matOut[threshDispI,:]=np.zeros(3)
+    
+    if os.path.exists(pathDispLeft): os.remove(pathDispLeft)
+    cv.imwrite(pathDispLeft.replace('.tif','.exr'), matOut.astype(np.float32), [cv.IMWRITE_EXR_TYPE, cv.IMWRITE_EXR_TYPE_FLOAT])
+    
+    return pathDispLeft
+    
 def SubArgs_P2D(pathPCIn, epsgCur):
     # Arguments
     subArgs=['--transverse-mercator',
@@ -386,20 +442,352 @@ def SubArgs_P2L(pathPCIn, epsgCur):
             ]
     return subArgs
 
-def MvsAddImg(descrip, lstDescrip):
-    # Vector reading
-    geomIn=Polygon(descrip['geometry']['coordinates'][0])
-    lstIdIn=[descrip['properties'][key] for key in descrip['properties'] if key.startswith('scene')]
+def BRratio(path1, path2, atype=False):
+    '''
+    Compute B/H ratio from camera file and return the incidence angle
+
+    path1 (str): camera file 1
+    path2 (str): camera file 2
+    atype ([False]|'deg'|'rad'): angle type selection
+    out:
+        bh (float): B/H ratio
+    '''
+    objCam1=GeomFunc.TSAIin(path1)
+    objCam2=GeomFunc.TSAIin(path2)
+
+    matCentres=np.append(objCam1.vectX0.T, objCam2.vectX0.T, axis=0)
+
+    base=norm(np.diff(matCentres, axis=0))
+    matCentresGeo=GeomFunc.Cart2Geo_Elli(matCentres)
+    height=np.mean(matCentresGeo, axis=0)[2]
+    angleInci=2*np.arctan(base/height/2)
+
+    if atype=='deg':
+        return angleInci*180/pi
+    elif atype=='rad':
+        return angleInci
+    elif not atype:
+        return base/height
+    else:
+        SubLogger('CRITICAL', 'Unknown atype (angle type): %s'% atype)
+
+def AspPc2Txt(pathIn):
+    '''
+    Convert -PC.tif (ASP format) into a .las point cloud in geopgarphic 
+    coordinates. It includes 'intersection error'*100 [m*100] as "Intensity"
+
+    pathIn (str): -PC.tif path
+    out:
+        0 (int): done
+
+    '''
+    pathTxt=pathIn.replace('.tif', '.txt')
     
-    lstIdNew=[]
-    for descripCur in lstDescrip:
-        if not descripCur['geometry']['type']=='Polygon': continue
-        geomNew=Polygon(descripCur['geometry']['coordinates'][0])
-        if not geomNew.intersects(geomIn): continue
-        newId=[descripCur['properties'][key] for key in descrip['properties'] if key.startswith('scene')]
-        lstIdNew+=[idCur for idCur in newId if not idCur in lstIdIn and not idCur in lstIdNew]
+    with rasterio.open(pathIn) as imgIn:
+        tagsCur=imgIn.tags()
+        if not 'POINT_OFFSET' in tagsCur: return 1
+
+        matOffset=np.array([float(off) for off in tagsCur['POINT_OFFSET'].split()])
+        matPtsFull=np.zeros([imgIn.width*imgIn.height, 4], dtype=np.float64)
+        for i in imgIn.indexes:
+            matPtsFull[:,i-1]=imgIn.read(i).flatten()  
+          
+    # logical OR on (x, y, z)
+    checkPts=np.sum(np.abs(matPtsFull), axis=1)>0
+    matPtsCart=matPtsFull[checkPts].astype(np.float64)
+    del matPtsFull
     
-    return lstIdNew
+    nbPts=matPtsCart.shape[0]
+    
+    # X=dX+Ox, Y=dY+Oy, Z=dZ+Oz, Intensity=e*1000
+    matPtsCart+=np.append(matOffset, [0])
+    matPtsCart[:,3]*=1000
+
+    lstPtsStr=[' '.join(lstLine)+'\n' for lstLine in matPtsCart.astype(str)]
+    
+    fileOut=open(pathTxt, 'w')
+    fileOut.write('X Y Z Intensity\n')
+    for i in range(matPtsCart.shape[0]):
+        fileOut.writelines(' '.join(matPtsCart[i].astype(str))+'\n')
+    fileOut.close()
+
+    return pathTxt
+
+def PdalJson(pathObj):
+    '''
+    Create PDAL pipeline jsone file
+    
+    pathObj (obj): PathCur class from VarCur
+    out:
+        0
+    '''
+    # Add stereopair ID
+    with open(pathObj.pJsonSource, 'w') as fileOut:
+        fileOut.writelines(json.dumps({"pipeline": 
+                                        [{  
+                                            "type":"readers.text",
+                                            "filename":"PathIn.txt",
+                                            "override_srs": "EPSG:4978"
+                                            },
+                                        {   
+                                            "type":"filters.reprojection",
+                                            "out_srs":"EPSG:0"},
+                                        {   
+                                            "type": "filters.ferry",
+                                            "dimensions": [ "=>PointSourceId",
+                                                            "=>ScanAngleRank"]
+                                        },
+                                        {   
+                                            "type":"filters.assign",
+                                            "tag": "source",
+                                            "value" : "PointSourceId= 0"
+                                            },
+                                        {   
+                                            "type":"filters.assign",
+                                            "tag": "angle",
+                                            "value" : "ScanAngleRank= 0"
+                                            },
+                                        "PathOut.las",
+                                        ]
+                                    }, indent=2))
+    # Filtering
+    with open(pathObj.pJsonFilter, 'w') as fileOut:
+        fileOut.writelines(json.dumps({"pipeline": 
+                                        ["PathIn.las",
+                                        {
+                                          "type":"filters.elm"
+                                        },
+                                        {
+                                          "type":"filters.outlier"
+                                        },
+                                        #{
+                                        #    "type":"filters.smrf"
+                                        #},
+                                        "PathOut.las"
+                                        ]
+                                    }, indent=2))
+
+    # Weighted average
+    # e_Z [m] = sig_Z^2 = e_H [m] / a [rad] = e_H [mm] / a [°] * 180/(pi*1000)
+    # w = sig_Z^{-2} = a [°] / e_H [mm] * pi*1000/180
+    # e_H [mm] = Intensity + 1000 to avoid over weighting and /0
+    # pipeline process uses Intensity as uint16, so not /1000
+    strWeight='ScanAngleRank/(Intensity+1000)*%.6f'% (pi/180*1000**2) # w = sig_Z^{-2} = e_Z^{-1} [m]
+    with open(pathObj.pJsonRast_WA, 'w') as fileOut:
+        fileOut.writelines(json.dumps({"pipeline": 
+                                        ["PathIn.las",
+                                        {
+                                            "type":"filters.range",
+                                            "limits":"Classification[0:0]"
+                                        },
+                                        {
+                                            "tag": "ImgCount",
+                                            "type": "writers.gdal",
+                                            "filename": "PathOut.tif",
+                                            "gdaldriver": "GTiff",
+                                            "data_type": "float32",
+                                            "output_type": "count",
+                                            "dimension": "Z",
+                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "resolution": str(gsdDsm),
+                                            "nodata": "-32767",
+                                            "origin_x": "0",
+                                            "origin_y": "0",
+                                            "width": str(1000//gsdDsm),
+                                            "height": str(1000//gsdDsm),
+                                        },
+                                        {
+                                            "tag": "ImgStdev",
+                                            "type": "writers.gdal",
+                                            "filename": "PathOut.tif",
+                                            "gdaldriver": "GTiff",
+                                            "data_type": "float32",
+                                            "output_type": "stdev",
+                                            "dimension": "Z",
+                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "resolution": str(gsdDsm),
+                                            "nodata": "-32767",
+                                            "origin_x": "0",
+                                            "origin_y": "0",
+                                            "width": str(1000//gsdDsm),
+                                            "height": str(1000//gsdDsm),
+                                        },
+                                        {   
+                                            "type":"filters.assign",
+                                            "value" : "Intensity=%s"% strWeight
+                                            },
+                                        {
+                                            "tag": "ImgW",
+                                            "type": "writers.gdal",
+                                            "filename": "PathOut.tif",
+                                            "gdaldriver": "GTiff",
+                                            "data_type": "float32",
+                                            "output_type": "mean",
+                                            #"power": "0.5",
+                                            "dimension": "Intensity",
+                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "resolution": str(gsdDsm),
+                                            "nodata": "-32767",
+                                            "origin_x": "0",
+                                            "origin_y": "0",
+                                            "width": str(1000//gsdDsm),
+                                            "height": str(1000//gsdDsm),
+                                        },
+                                        {   
+                                            "type":"filters.assign",
+                                            "value" : "Z=Z*Intensity"
+                                            },
+                                        {
+                                            "tag": "ImgWZ",
+                                            "type": "writers.gdal",
+                                            "filename": "PathOut.tif",
+                                            "gdaldriver": "GTiff",
+                                            "data_type": "float32",
+                                            "output_type": "mean",
+                                            #"power": "0.5",
+                                            "dimension": "Z",
+                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "resolution": str(gsdDsm),
+                                            "nodata": "-32767",
+                                            "origin_x": "0",
+                                            "origin_y": "0",
+                                            "width": str(1000//gsdDsm),
+                                            "height": str(1000//gsdDsm),
+                                        },
+                                        ]
+                                    }, indent=2))
+
+    return 0
+
+def PC_Summary(lstPath, lstEmpty, lstBoundsCur, nb, pathTxt):
+    nbFile=len(lstPath)+len(lstEmpty)
+    lstMid=np.round(np.mean(np.array(lstBoundsCur).reshape(2,2), axis=0), -3).astype(int).tolist()
+
+    # STDOUT summary
+    SubLogger('WARNING', '='*30)
+    SubLogger('INFO', '\tFile number (usable/empty)  : %i/%i'% (len(lstPath),len(lstEmpty)))
+    SubLogger('INFO', '\tFile percent (usable/empty) : %.1f/%.1f'% (len(lstPath)/nbFile*100,len(lstEmpty)/nbFile*100))
+    SubLogger('INFO', '\tPoint number                : %i'% nb)
+    SubLogger('INFO', '\tCentre coords [m]           : %i %i'% tuple(lstMid))
+
+    # Record file list
+    if os.path.exists(pathTxt):
+        with open(pathTxt) as fileIn:
+            lstPCmerge=[lineCur.strip() for lineCur in fileIn.readlines()]
+        lstPCin=[path in lstPCmerge for path in lstPath]
+        checkMerged=all(lstPCin) and len(lstPCin)==len(lstPCmerge)
+    else:
+        checkMerged=False
+
+    return (checkMerged, lstMid)
+
+def FilterTiles(lstMid, lstTilePath, pathTemplate, featAoi):
+    '''
+    Filter out outside tile by geometry intersection and 
+    rename tiles by replacing indices with top-left 
+    coordinates [km].
+    
+    jsonInfo00 (json): 0_0 tile informations
+    lstTilePath (list): tile path list
+    pathTemplate (str): tile path template with '#'
+    out:
+        code (int): process return code sum
+    '''
+    matOrigin=(np.array(lstMid)*1e-3).astype(int)
+    
+    geomAoi=Polygon(featAoi['geometry']['coordinates'][0][0])
+    cornerTile=np.array([[0,0],[0,1],[1,1],[1,0], [0,0]])
+
+    strTemplate=pathTemplate.split('#')
+    code=0
+    for pathTile in lstTilePath:
+        strIndexIn=pathTile.replace(strTemplate[0],'').replace(strTemplate[1],'')
+        indexIn=np.array(strIndexIn.split('_')).astype(int)
+        indexOut=matOrigin+indexIn
+        geomTile=Polygon((indexOut+cornerTile)*1e3)
+        if not geomTile.intersects(geomAoi):
+            code+=os.system('rm %s'% pathTile)
+            continue
+
+        strIndexOut='_'.join((indexOut+[0,1]).astype(str))
+        cmd='mv %s %s'% (pathTile, pathTile.replace(strIndexIn, strIndexOut))
+        code+=os.system(cmd)
+    
+    return code
+
+def PC2Raster(pathIn, pathOut, lstIndex, pathJson, pdalTool):
+    pathJsonCur='.'.join(pathOut.split('.')[:-1])+'.json'
+    dicOri={'origin_x': str(lstIndex[0]*1000),
+            'origin_y': str((lstIndex[1]-1)*1000)}
+    
+    # Update pipeline
+    with open(pathJson) as fileIn:
+        jsonPipline=json.load(fileIn)
+    for brick in jsonPipline['pipeline']:
+        if not 'type' in brick or not brick['type']=='writers.gdal': continue
+        brick.update(dicOri)
+    with open(pathJsonCur, 'w') as fileOut:
+        fileOut.writelines(json.dumps(jsonPipline, indent=2))
+
+    # ImgCount, ImgStdev, ImgWeight ,ImgWZ
+    lstPath=(pathOut.replace('.','_Count.'),
+             pathOut.replace('.','_Stdev.'),
+             pathOut.replace('.','_W.'),
+             pathOut.replace('.','_WZ.'))
+    subArgs=[pathJsonCur,
+            '--readers.las.filename=%s'% pathIn,
+            '--stage.ImgCount.filename=%s'% lstPath[0],
+            '--stage.ImgStdev.filename=%s'% lstPath[1],
+            '--stage.ImgW.filename=%s'% lstPath[2],
+            '--stage.ImgWZ.filename=%s'% lstPath[3]]
+    
+    pdalTool.pipeline(subArgs)
+    
+    # Raster combination
+    with rasterio.open(lstPath[2]) as imgIn:
+        profileImg=imgIn.profile
+        matMeanW=imgIn.read(1)
+    
+    indexNoData=np.where(matMeanW==-32767)
+    np.clip(matMeanW, 1, None, out=matMeanW)
+
+    # Update profile
+    profileImg['count']=5
+
+    if not (profileImg['width']>0 and profileImg['height']>0 and profileImg['width']*profileImg['height']>0):
+        return os.system(cmdClean)
+    
+    with rasterio.open(pathOut, 'w', **profileImg) as imgOut:
+        
+        # Count
+        with rasterio.open(lstPath[0]) as imgIn:
+            matCount=imgIn.read(1)
+        # Standard dev
+        with rasterio.open(lstPath[1]) as imgIn:
+            matStdev=imgIn.read(1)
+        # Height
+        with rasterio.open(lstPath[3]) as imgIn:
+            matMeanWZ=imgIn.read(1)
+        
+        imgOut.set_band_description(1, 'Height')
+        matOut=matMeanWZ/matMeanW
+        matOut[indexNoData]=-32767
+        imgOut.write(matOut,1)
+        imgOut.set_band_description(2, 'Accuracy') 
+        matOut=matStdev+np.sqrt(1000/matMeanW-1)
+        matOut[indexNoData]=-32767
+        imgOut.write(matOut,2)
+        imgOut.set_band_description(3, 'Stdev Pts')
+        imgOut.write(matStdev,3)
+        imgOut.set_band_description(4, 'Stdev Intersec')
+        matOut=np.sqrt(1000/matMeanW-1)
+        matOut[indexNoData]=-32767
+        imgOut.write(matOut,4)
+        imgOut.set_band_description(5, 'Count Pts')
+        imgOut.write(matCount,5)        
+
+    cmdClean='rm %s'% ' '.join(list(lstPath)+[pathJsonCur,])
+    return os.system(cmdClean)
 
 
 def DisplayMat(mat):
@@ -411,6 +799,7 @@ def DisplayMat(mat):
     imgMat=Image.fromarray(matDisp.astype(float))
     imgMat.show()
     sys.exit()
+
 #=======================================================================
 #main
 #-----------------------------------------------------------------------
@@ -418,3 +807,5 @@ if __name__ == "__main__":
     print('\nFunctions and classes available in %s:'% __title__)
     print([i for i in dir() if not '__' in i])
         
+
+

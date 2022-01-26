@@ -6,6 +6,7 @@ from pprint import pprint
 import json
 from datetime import datetime
 from shutil import copy2
+from pprint import pprint
 
 # dsm_from_planetscope libraries
 from OutLib.LoggerFunc import *
@@ -90,11 +91,13 @@ def Main(args):
 
         if not args.b in methodB: raise RuntimeError("-b must be one of %s"% str(methodB))        
 
-        if args.fBH and not args.extMD: raise RuntimeError("The BH filtering needs access to extended metadata")
+        if args.fBH and not args.extMD: 
+            if input("The BH filtering needs extended metadata, do you want to continue (any key stops):"):
+                raise RuntimeError("The BH filtering needs acces to extended metadata")
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
-
+        
         print()
         if not checkSearch: 
             logger.warning('Former search mode')
@@ -133,18 +136,33 @@ def Main(args):
             pathOut=os.path.join(args.o, fileAoi.format(datetime.now().strftime('%Y%m%d_%H%M%S')))
             copy2(args.i,pathOut)
 
-            pathOut= os.path.join(args.o, nameSearchFull)
-            logger.info('Saved in %s'% pathOut)
-            with open(pathOut,'w') as fileOut:
-                strOut=json.dumps(lstFeat, indent=2)
-                fileOut.write(strOut)
 
-            pathOut=pathOut.replace('json','geojson')
-            with open(pathOut,'w') as fileOut:
-                objOut=tempGeojson.copy()
-                objOut['name']=nameSearchFull.split('.')[0]
-                objOut['features']=lstFeat.copy()
-                fileOut.write(json.dumps(objOut, indent=2))
+            pathJson= os.path.join(args.o, nameSearchFull)
+            pathGeojson=pathJson.replace('json','geojson')
+            logger.info('Saved in %s'% pathOut)
+
+            objOut=tempGeojson.copy()
+            objOut['name']=nameSearchFull.split('.')[0]
+            del objOut['Features']
+
+            fileGeojson=open(pathGeojson,'w')
+            fileJson=open(pathJson,'w')
+            fileGeojson.write(json.dumps(objOut, indent=2)[:-2])
+            fileGeojson.write(',\n  "Features":[\n')
+            fileJson.write('[\n')
+            
+            for i, feat in enumerate(lstFeat):
+                lineEnd=',\n'
+                if not i: lineEnd=''
+                fileGeojson.write(lineEnd+json.dumps(feat))
+                fileJson.write(lineEnd+json.dumps(feat))
+
+            fileGeojson.write(']\n}')
+            fileGeojson.close()
+            fileJson.write(']')
+            fileJson.close()
+
+            del jsonParam, objOut, feat, filterJson
 
         logger.info('%i found scenes'% len(lstFeat))
         
@@ -152,26 +170,33 @@ def Main(args):
         # Block creation
         #---------------------------------------------------------------
         logger.info('# Block creation')
-        objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, args.b)
-        logger.info(objBlocks)
+        objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
+        if not objBlocks.nbB:
+            del objBlocks
+            objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, args.b)
         
+        logger.info(objBlocks)
+        del lstFeat, objBlocks
+
         #---------------------------------------------------------------
         # Block first filtering
         #---------------------------------------------------------------
         if args.fFP:
             logger.info('# Block footprint filtering')
-            filterFunc.FilterBlocks(objBlocks, 'fp')
+            filterFunc.FilterBlocks(args.o, 'fp')
+            objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
             logger.info(objBlocks)
+            del objBlocks
 
         #---------------------------------------------------------------
         # Include Ext MD
         #---------------------------------------------------------------
         if args.extMD:
-            logger.info('# Include Ext MD')
+            logger.info('# Include extended metadata')
             if metaDFunc.CheckPC():
                 lstMdCur=('sat:alt', 'sat:lat', 'sat:lng', 'sat:off_nadir', 'sat:satellite_azimuth_mean')
-                metaDFunc.ExtractMD_Blocks(objBlocks,lstMdCur)
-                objBlocks.SatGeo2Cart()
+                metaDFunc.ExtractMD_Blocks(args.o,lstMdCur)
+                del lstMdCur
             else:
                 logger.error('The extended metadata retrieval needs planet_common env and it is not accessible. You can use -extMD to stop reading extended MD and -fBH to stop the B/H filtering (which needs B/H info from extended MD). The process will continue without extended MD and B/H filtering')
                 args.extMD=False
@@ -181,43 +206,33 @@ def Main(args):
         # Scene coupling
         #---------------------------------------------------------------
         logger.info('# Scene coupling')
-        objBlocks.StereoCoupling()
+        blockFunc.StereoCoupling(args.o)
         
         #---------------------------------------------------------------
         # Block Coverage
         #---------------------------------------------------------------
         if args.cov:
             logger.info('# Block Coverage')
-            objBlocks.Coverage(featAoi)
-
-        #---------------------------------------------------------------
-        # Block storage
-        #---------------------------------------------------------------
-        logger.info('# Block storage')
-        objBlocks.WriteBlocks()
-        
+            blockFunc.Coverage(args.o, featAoi)
         
         #---------------------------------------------------------------
         # Block B/H filtering
         #---------------------------------------------------------------
-        ####
-        #objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, 'dir')
         if args.fBH:
-            logger.info('# Block B/H filtering')
-            filterFunc.FilterBlocks(objBlocks, 'bh', aoi=featAoi, red=args.fBHred)
+            logger.info('# Block B/H filtering and block update')
+
+            filterFunc.FilterBlocks(args.o, 'bh', aoi=featAoi, red=args.fBHred)
+            objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
             logger.info(objBlocks)
-            
-            # Update stereo
-            logger.info('# Update scene coupling')
-            objBlocks.StereoCoupling(moreComb=True)
+            del objBlocks
 
             # Update Coverage
-            if args.cov:
-                logger.info('# Update Coverage')
-                objBlocks.Coverage(featAoi)
+            if args.cov: blockFunc.Coverage(args.o, featAoi)
+            
+            # Update stereo
+            blockFunc.StereoCoupling(args.o, moreComb=True)
 
-            # Update block descriptors
-            objBlocks.WriteBlocks()
+            
 
     #---------------------------------------------------------------
     # Exception management
@@ -257,11 +272,9 @@ if __name__ == "__main__":
         parser.add_argument('-viewAngle', type=float, help='Maximum view angle')
         parser.add_argument('-gsd', type=float, help='Maximum gsd')
         parser.add_argument('-quali', help='Product quality')
+        parser.add_argument('-sunElevation', default=20, help='Minimum sun elevation (default: 20°)')
         lstKeySearch=('itemType', 'assetType', 'cloudUnder', 'dateAcq', 'inst', 'viewAngle', 'gsd', 'quali')
 
         argsMain = parser.parse_args()
 
         Main(argsMain)
-
-        print('\nEND, Continue with scene creation')
-

@@ -39,6 +39,8 @@ def Main(args):
         # Check input
         #---------------------------------------------------------------
         if not os.path.isdir(args.i): raise RuntimeError("Working directory not found")
+        if any([l.isupper() for l in args.n]): raise RuntimeError("Name AOI must be low case")
+        if '_' in args.n or '-' in args.n: raise RuntimeError("Name AOI cannot contain '_' or '-'")
         
         if not args.l: 
             args.l= list(dicLevel.keys())[0]
@@ -66,24 +68,24 @@ def Main(args):
         # Read Repo
         #---------------------------------------------------------------
         logger.info('# Read Repo')
-        objBlocks=SceneBlocks([], args.i, 'dir')
-        
+        objInfo=SceneBlocks([], args.i, 'info')
+        if not objInfo.nbB: raise RuntimeError('No block available')
+
         #---------------------------------------------------------------
         # Loop per block
         #---------------------------------------------------------------
         logger.info('# Action per block')
-        
-        if not args.b:
-            lstLoop=range(objBlocks.nbB)
-        else:
-            lstLoop=[i for i in range(objBlocks.nbB) if objBlocks.lstBId[i][0] in args.b]
-        
-        for iB in lstLoop:
-            nameB=objBlocks.lstBId[iB][0]
+        if args.b:
+            lstBId=[objInfo.lstBId.index(blockCur) for blockCur in objInfo.lstBId if blockCur[0] in args.b]
+        else: 
+            lstBId=range(objInfo.nbB)
 
-            print()
+        for iB in lstBId:
+            nameB, nbFeat=objInfo.lstBId[iB]
             logger.info(nameB)
-            newBucket=PCTBucket(nameB, args.l, objBlocks.lstBFeat[iB], args.i)
+            objCur=SceneBlocks([], args.i, 'dir', b=nameB)
+
+            newBucket=PCTBucket(args.n, nameB, args.l, objCur.lstBFeat[0], args.i)
             
             if 'info' in args.a:
                 logger.info(newBucket)
@@ -118,6 +120,7 @@ if __name__ == "__main__":
         # Retrieval of arguments
         #---------------------------------------------------------------
         parser.add_argument('-i', required=True, help='Working directory')
+        parser.add_argument('-n', required=True, help='Aoi Name')
         
         # Optional arguments
         parser.add_argument('-b',nargs='+', default=False, help='Block name to process (default: Fasle means all)')
@@ -128,5 +131,3 @@ if __name__ == "__main__":
         argsMain = parser.parse_args()
         
         Main(argsMain)
-
-        print('\nEND, Continue with bundle adjsut')        

@@ -3,11 +3,13 @@
 
 import os, sys, time, logging
 from datetime import datetime, date
+from math import pi
 from dateutil.relativedelta import relativedelta
 import numpy as np
 import json
 from glob import glob
 from shapely.geometry import Polygon
+from shapely.errors import TopologicalError as shapelyTopoE
 import rasterio
 from rasterio.features import geometry_mask
 from rasterio.transform import from_origin
@@ -24,7 +26,7 @@ from pprint import pprint
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__=['SceneBlocks', 'Date2Int', 'SimplifyGeom']
+__all__=['SceneBlocks', 'Date2Int', 'DisplayFootprint', 'RatioBH', 'Coverage', 'StereoCoupling', 'SatGeo2Cart']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
@@ -55,7 +57,7 @@ class SceneBlocks():
             lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
     '''
 
-    def __init__(self, lstIn, pathOut, meth):
+    def __init__(self, lstIn, pathOut, meth, b=None):
         '''
         Main block creation function leading to Build_xx functions
         '''
@@ -69,7 +71,9 @@ class SceneBlocks():
         elif meth=='month':
             self.Build_Month(lstIn)
         elif meth=='dir':
-            self.Build_Dir()
+            self.Build_Dir(b)
+        elif meth=='info':
+            self.Build_Info()
         else:
             SubLogger('CRITICAL', 'Unknown block method (%s)'% meth)
 
@@ -108,6 +112,37 @@ class SceneBlocks():
                     self.nbFeat)]
         self.nbB=1
 
+        iB=0
+        bName, nbFeat=self.lstBId[iB]
+        # Directory
+        bName, nbFeat=self.lstBId[iB]
+        pathDir= os.path.join(self.dirOut, bName)
+        if not os.path.exists(pathDir): os.mkdir(pathDir)
+        # Scene Id txt
+        pathOut=os.path.join(self.dirOut, sbName, fileSceneId.format(bName))
+        if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+        with open(pathOut,'w') as fileOut:
+            strOut='\n'.join([feat['id']+extSceneIn for feat in self.lstBFeat[iB]])
+            fileOut.write(strOut)
+
+        # Selection Geojson
+        pathOut=os.path.join(self.dirOut, bName,fileSelec.format(bName))
+        if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+        objOut=tempGeojson.copy()
+        objOut['name']=fileSelec.format(bName).split('.')[0]
+        del objOut['Features']
+        strOut=json.dumps(objOut, indent=2)
+
+        fileOut=open(pathOut,'w')
+        fileOut.write(strOut[:-2])
+        fileOut.write(',\n  "Features":[\n')
+        for i, feat in enumerate(self.lstBFeat[iB]):
+            lineEnd=',\n'
+            if not i: lineEnd=''
+            fileOut.write(lineEnd+json.dumps(feat))
+        fileOut.write(']\n}')
+        fileOut.close()
+
     def Build_Month(self, lstIn):
         '''
         Build scene block per month
@@ -139,8 +174,7 @@ class SceneBlocks():
         self.lstBId=[]
 
         while monthCur<=monthMax:
-            nameB=nameBlock.format(str(monthCur))
-            SubLogger('INFO', nameB)            
+            nameB=nameBlock.format(str(monthCur))           
             lstFeatCur=[]
 
             for i in range(self.nbFeat):
@@ -164,8 +198,40 @@ class SceneBlocks():
             SubLogger('CRITICAL', 'Block creation issue, %i clustered feature among %i inputs'% (sumBlock, self.nbFeat))
 
         self.nbB=len(self.lstBId)
-    
-    def Build_Dir(self):
+
+        for iB in range(self.nbB):
+            bName, nbFeat=self.lstBId[iB]
+            SubLogger('INFO', bName) 
+            pathDir= os.path.join(self.dirOut, bName)
+            if not os.path.exists(pathDir): os.mkdir(pathDir)
+            
+            # Scene Id txt
+            pathOut=os.path.join(self.dirOut, bName, fileSceneId.format(bName))
+            if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+            with open(pathOut,'w') as fileOut:
+                strOut='\n'.join([feat['id']+extSceneIn for feat in self.lstBFeat[iB]])
+                fileOut.write(strOut)
+
+            # Selection Geojson
+            pathOut=os.path.join(self.dirOut, bName,fileSelec.format(bName))
+            if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+            
+            objOut=tempGeojson.copy()
+            objOut['name']=fileSelec.format(bName).split('.')[0]
+            del objOut['Features']
+            strOut=json.dumps(objOut, indent=2)
+
+            fileOut=open(pathOut,'w')
+            fileOut.write(strOut[:-2])
+            fileOut.write(',\n  "Features":[\n')
+            for i, feat in enumerate(self.lstBFeat[iB]):
+                lineEnd=',\n'
+                if not i: lineEnd=''
+                fileOut.write(lineEnd+json.dumps(feat))
+            fileOut.write(']\n}')
+            fileOut.close()
+ 
+    def Build_Dir(self, b):
         '''
         Recreate the python object from repository and descriptors
 
@@ -185,7 +251,7 @@ class SceneBlocks():
 
         for pathB in lstPath:
             nameB=os.path.basename(pathB)
-            SubLogger('INFO', nameB)
+            if b and not nameB==b: continue
 
             # Block number
             self.nbB+=1
@@ -195,451 +261,57 @@ class SceneBlocks():
             if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% nameBFile.format(nameB, 'Search.json'))
             with open(pathDescip) as fileIn:
                 geojsonTxt=json.load(fileIn)
-                self.lstBFeat.append(geojsonTxt['features'])
+                self.lstBFeat.append(geojsonTxt['Features'])
 
             # Block ID list and feat number
             self.lstBId.append((nameB, len(self.lstBFeat[-1])))
 
             # Scene couple
             pathDescip=os.path.join(pathB, fileStereo.format(nameB))
-            if os.path.exists(pathDescip):
+            if not os.path.exists(pathDescip): return 0
+            try:
                 with open(pathDescip) as fileIn:
                     geojsonTxt=json.load(fileIn)
-                    self.lstBCouple.append(geojsonTxt['features'])
-    
-    def SatGeo2Cart(self, lstBName=False):
+                    self.lstBCouple.append(geojsonTxt['Features'])
+            except json.decoder.JSONDecodeError:
+                SubLogger('CRITICAL', 'corrupt stereo file, please, delete it: %s'% os.path.basename(pathDescip))
+
+    def Build_Info(self):
         '''
-        Compute the cartesian coordinate of the camera center
-        based on lat [°], long [°] and alt [km] above 
-        the ellipsoid WGS84. iIt can be run after extended 
-        metadata importation.
-        
-        descrip1 (json): scene desciptor to update
+        Recreate the python object from repository and descriptors
+
         out:
-            objBlock (class): updated object
-                    lstBCouple (list): list of json stereo pairs
-        ''' 
-        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
-
-        if lstBName:
-            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
-        else: 
-            lstBI=range(self.nbB)
-
-        for bI in lstBI:
-            SubLogger('INFO', self.lstBId[bI][0])
-
-
-            ptsGeo=np.zeros([self.lstBId[bI][1],3])
-            for i in range(self.lstBId[bI][1]):
-                lstKeys=('sat:alt_km', 'sat:lat_deg', 'sat:lng_deg')
-                checkAttrib=[key in self.lstBFeat[bI][i]['properties'].keys() for key in lstKeys]
-                if False in checkAttrib: 
-                    SubLogger('ERROR', 'extended MD not available, requires %s'% str(lstKeys))
-                    continue
-                
-                ptsGeo[i,:]=np.array([self.lstBFeat[bI][i]['properties']['sat:lng_deg'], 
-                                      self.lstBFeat[bI][i]['properties']['sat:lat_deg'],
-                                      self.lstBFeat[bI][i]['properties']['sat:alt_km']*1e3])
-             
-            ptsCart=Geo2Cart_Elli(ptsGeo)
-
-            # Update
-            for i in range(self.lstBId[bI][1]):
-                for j, key in enumerate(('ecefX_m', 'ecefY_m', 'ecefZ_m')):
-                    self.lstBFeat[bI][i]['properties'][key]=ptsCart[i,j]
-
-    def StereoCoupling(self, lstBName=False, moreComb=False):
-        '''
-        Create list of stereo scene pairs, triplet, etc
-        
-        lstBName (lst): list of block name (default: False means all)
-        moreComb (bool): compute triplets and higher scene combinaisons (default: False) 
-        out:
-            objBlock (class): updated object
+            objBlock (class):
+                lstBId (list with (str, int)): list of tuple with block ID (name), feature number
+                lstBFeat (list with json): list with feature decription
+                nbB (int): number of block
                 lstBCouple (list): list of json stereo pairs
         '''
-        from copy import deepcopy
-        lstKeysBH=('ecefX_m', 'ecefY_m', 'ecefZ_m', 'sat:alt_km')
+        regexBlock=os.path.join(self.dirOut,nameBlock.format('*'))
+        lstPath=glob(regexBlock)
+        self.nbB=0
+        lstPath.sort()
 
-        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
+        self.lstBId=[]
 
-        self.lstBCouple=[]
+        for pathB in lstPath:
+            nameB=os.path.basename(pathB)
 
-        if lstBName:
-            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
-        else: 
-            lstBI=range(self.nbB)
+            # Block number
+            self.nbB+=1
 
-        for bI in lstBI:
-            SubLogger('INFO', self.lstBId[bI][0])
+            # Feature list
+            pathDescip=os.path.join(pathB, fileSelec.format(nameB))
+            if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% nameBFile.format(nameB, 'Search.json'))
+            with open(pathDescip) as fileIn:
+                geojsonTxt=json.load(fileIn)
+                lstBFeat=geojsonTxt['Features']
 
-            lstK=[0]
-            # Pairs
-            self.lstBCouple.append([])
-            k=-1
-            for i in range(self.lstBId[bI][1]):
-                feat1=self.lstBFeat[bI][i]
-                geom1=Polygon(feat1['geometry']['coordinates'][0])
-
-                for j in range(i+1,self.lstBId[bI][1]):
-                    feat2=self.lstBFeat[bI][j]
-                    geom2=Polygon(feat2['geometry']['coordinates'][0])
-                    if not geom1.intersects(geom2): continue
-                    
-                    # New intersection
-                    k+=1
-                    newCouple=tempDescripPair.copy()
-                    newCouple['id']=k
-                    newCouple['properties']['id']=k
-                    newCouple['properties']['nbScene']=2
-                    newCouple['properties']['scenes']='%s;%s'% (feat1['id'], feat2['id'])
-                    newCouple['properties']['scenesI']='%i;%i'% (i, j)
-                    
-                    # New B/H
-                    checkAttrib=[key in feat1['properties'].keys() for key in lstKeysBH]
-                    checkAttrib+=[key in feat2['properties'].keys() for key in lstKeysBH]
-                    if not False in checkAttrib: newCouple['properties']['bh']=RatioBH(feat1,feat2)
-
-                    # New geometry 
-                    geomInters=geom1.intersection(geom2)
-                    newCouple["geometry"]["type"]= geomInters.geom_type
-                    
-                    if geomInters.geom_type=='Polygon' :
-                        lstCoords=[list(geomInters.exterior.coords)]
-                        newCouple['properties']['area']=geomInters.area
-                    else:
-                        SubLogger('CRITICAL', '%s no managed'% geomInters.geom_type)
-                        #lstCoords=[]
-                        #for geomPart in geomInters:
-                        #    lstCoords.append([list(geomPart.exterior.coords)])
-                        #    newCouple['properties']['area']=geomPart.area
-
-                    newCouple['geometry']['coordinates']=lstCoords
-                    
-                    self.lstBCouple[-1].append(deepcopy(newCouple))
-            SubLogger('INFO', '%i combinaisons (%i)'% (k+1, 2))
-            lstK.append(k)
-
-            if not moreComb: continue
-            # More combinaisons based on pairs
-            keepComb=True
-            l=2
-            while keepComb:
-                l+=1
-                keepComb=False
-                for i in range(lstK[-2], lstK[-1]+1):
-                    comb1=self.lstBCouple[-1][i]
-                    geom1=Polygon(comb1['geometry']['coordinates'][0])
-                    i0=[int(j) for j in comb1['properties']['scenesI'].split(';')]
-                    
-                    for j in range(max(i0),self.lstBId[bI][1]):
-                        if j in i0: continue
-                        feat2=self.lstBFeat[bI][j]
-                        geom2=Polygon(feat2['geometry']['coordinates'][0])
-                        if not geom1.intersects(geom2): continue
-
-                        keepComb=True
-                        # New intersection
-                        k+=1
-                        newCouple=tempDescripPair.copy()
-                        newCouple['id']=k
-                        newCouple['properties']['id']=k
-                        newCouple['properties']['nbScene']=comb1['properties']['nbScene']+1
-                        newCouple['properties']['scenes']='%s;%s'% (comb1['properties']['scenes'], feat2['id'])
-                        lstIFeat=comb1['properties']['scenesI'].split(';')+[str(j)]
-                        newCouple['properties']['scenesI']=';'.join(lstIFeat)
-                        ####################
-                        # New B/H: just for info
-                        # Caution: the mean does not take care of MVS
-                        lstBH=[]
-                        for strIFeat in lstIFeat[:-1]:
-                            iFeat=int(strIFeat)
-                            feat1=self.lstBFeat[bI][iFeat]
-                            checkAttrib=[key in feat1['properties'].keys() for key in lstKeysBH]
-                            checkAttrib+=[key in feat2['properties'].keys() for key in lstKeysBH]
-                            if not False in checkAttrib: lstBH.append(RatioBH(feat1,feat2))
-                        meanBH=sum(lstBH)/len(lstBH)
-                        newCouple['properties']['bh']=(comb1['properties']['bh']*(l-1)+meanBH)/l
-
-                        # New geometry 
-                        geomInters=geom1.intersection(geom2)
-                        newCouple["geometry"]["type"]= geomInters.geom_type
-                        
-                        if geomInters.geom_type=='Polygon' :
-                            lstCoords=[list(geomInters.exterior.coords)]
-                            newCouple['properties']['area']=geomInters.area
-                        else:
-                            SubLogger('CRITICAL', '%s no managed'% geomInters.geom_type)
-
-                        newCouple['geometry']['coordinates']=lstCoords
-                        
-                        self.lstBCouple[-1].append(deepcopy(newCouple))
-
-                SubLogger('INFO', '%i combinations (%i scenes => +%i)'% (k+1, l, k-lstK[-1]))
-                lstK.append(k)    
-
-    def Coverage(self, featAoi, lstBName=False):
-        '''
-        Compute the number of scene per ground sample and 
-        stereopair (if available). It is written down laster 
-        by the WriteBlocks function.
-
-        featAoi (json): orignal AOI feature used as mask
-        lstBName (list): list of block name (default: False means all)
-        out:
-            objBlock (class): updated object
-                lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
-        '''
-        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
-
-        geomAoiJson=featAoi['features'][0]['geometry']
-        geomAoi=Polygon(geomAoiJson['coordinates'][0][0])
-
-        boundsGeomAoi=geomAoi.bounds
-        boundsAoi=[item//imageGsd*imageGsd+k//2*imageGsd for k,item in enumerate(boundsGeomAoi)]
-        shapeAoi=(int((boundsAoi[3]-boundsAoi[1])/imageGsd), int((boundsAoi[2]-boundsAoi[0])/imageGsd))
-        transfAoi=from_origin(boundsAoi[0],boundsAoi[-1],imageGsd,imageGsd)
-        
-        # Mask to AOI
-        frameMask=geometry_mask((geomAoiJson,), 
-                                shapeAoi,
-                                transfAoi,
-                                all_touched=True,
-                                invert=True,
-                                )
-
-        self.lstCoverage=[]
-
-        if lstBName:
-            lstBI=[self.lstBName.index(blockCur) for blockCur in self.lstBName if blockCur[0] in lstBName]
-        else: 
-            lstBI=range(self.nbB)
-
-        for bI in lstBI:
-            SubLogger('INFO', self.lstBId[bI][0])
-            
-            # Update and store image profile
-            self.lstCoverage.append([profileCoverTif.copy(),])
-            self.lstCoverage[-1][0]['height'],self.lstCoverage[-1][0]['width']=shapeAoi
-            self.lstCoverage[-1][0]['transform']=transfAoi
-            self.lstCoverage[-1][0]['crs']=CRS.from_epsg(4326)
-
-            # Compute scene pair count
-            frameGeomStack=self.Geometry_Stack(shapeAoi, transfAoi, self.lstBFeat[bI])
-            self.lstCoverage[-1].append(frameGeomStack*frameMask)
-
-            # Compute stereo pair count
-            ''' It is useless because it prints out 
-            the same geometry in longeur time and 
-            and exceed 255 => must be turned to 16 bits
-                It will be usefull once the B/H ratio would be included !
-            '''
-            continue
-            if 'lstBCouple' in self.__dir__():
-                self.lstCoverage[-1][0]['count']*=1
-                frameGeomStack=self.Geometry_Stack(shapeAoi, transfAoi, self.lstBCouple[bI])
-                self.lstCoverage[-1].append(frameGeomStack*frameMask)
-
-    def Geometry_Stack(self, shapeCur, transfCur, featIn):
-        '''
-        Add geometry per ground sample. It is write down laster by the WriteBlocks function.
-
-        shapeCur (tuple): frame shape (row, column)
-        transfCur (Affine): image transformation
-        featIn (lst): list of geometry to stack
-        out:
-            frameOut (np.array): counting image frame
-        '''
-        from rasterio.features import rasterize
-        from rasterio.enums import MergeAlg
-        nbFeat=len(featIn)
-        frameOut=np.zeros(shapeCur)
-        
-        # Add scene
-        procBar=ProcessStdout(name='Geometry_Stack',inputCur=nbFeat)
-        for i in range(nbFeat):
-            procBar.ViewBar(i)
-            frameOut=rasterize((featIn[i]['geometry'],),
-                                out_shape=shapeCur,
-                                out=frameOut,
-                                fill=0,
-                                all_touched=True,
-                                transform=transfCur,
-                                merge_alg=MergeAlg.add,
-                                default_value=1,
-                                dtype=np.uint8,
-                                )
-        return frameOut
-            
-    def WriteBlocks(self, lstBName=False, simpleGeom=False):
-        '''
-        Write block descriptors at the given path creating block subfolder.
-
-        lstBName (list): list of block name to write (default: False means all blocks).
-            e.g.: ['B202010', 'B202011'] 
-        simpleGeom (bool): replace existing geometry by the simplify one.
-        out:
-        '''
-        if not self.nbB: SubLogger('CRITICAL', 'No existing block')
-        
-        # Write all files
-        if lstBName:
-             lstBId=[self.lstBId.index(blockCur) for blockCur in self.lstBId if blockCur[0] in lstBName]
-        else:
-            lstBId=range(self.nbB)
-
-        for bI in lstBId:
-            SubLogger('INFO', self.lstBId[bI][0])
-
-            # Creation simplify geometry
-            if simpleGeom and not 'geometry_simple' in self.lstBFeat[bI][0]:
-                for j in range(self.lstBId[bI][1]):
-                    self.lstBFeat[bI][j]['geometry']={"type": "Polygon",
-                                                        "coordinates": [SimplifyGeom(self.lstBFeat[bI][j]['geometry']['coordinates'][0], rdpEpsi)]}
-
-            # Directory
-            pathDir= os.path.join(self.dirOut, self.lstBId[bI][0])
-            if not os.path.exists(pathDir): os.mkdir(pathDir)
-
-            # Scene Id txt
-            pathOut=os.path.join(pathDir,fileSceneId.format(self.lstBId[bI][0]))
-            if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
-            with open(pathOut,'w') as fileOut:
-                strOut='\n'.join([feat['id']+extSceneIn for feat in self.lstBFeat[bI]])
-                fileOut.write(strOut)
-
-            # Selection Geojson
-            pathOut=os.path.join(pathDir,fileSelec.format(self.lstBId[bI][0]))
-            if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
-            objOut=tempGeojson.copy()
-            objOut['name']=fileSelec.format(self.lstBId[bI][0]).split('.')[0]
-            objOut['features']=self.lstBFeat[bI]
-            with open(pathOut,'w') as fileOut:
-                fileOut.write(json.dumps(objOut, indent=2))
-
-            # Coupling json
-            if 'lstBCouple' in self.__dir__():
-                pathOut= os.path.join(pathDir, fileStereo.format(self.lstBId[bI][0]))
-                if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
-                objOut=tempGeojson.copy()
-                objOut['name']=fileStereo.format(self.lstBId[bI][0]).split('.')[0]
-                objOut['features']=self.lstBCouple[bI]
-                with open(pathOut,'w') as fileOut:
-                    fileOut.write(json.dumps(objOut, indent=2))
-            
-            # Coverage tif
-            if 'lstCoverage' in self.__dir__():
-                pathOut= os.path.join(pathDir, fileCov.format(self.lstBId[bI][0]))
-                if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
-                with rasterio.open(pathOut,'w',**self.lstCoverage[bI][0]) as fileOut:
-                    for iFrame in range(1,len(self.lstCoverage[bI])):
-                        fileOut.write(self.lstCoverage[bI][iFrame].astype('uint8'), iFrame)
-                self.lstCoverage[bI]=False
-
+            # Block ID list and feat number
+            self.lstBId.append((nameB, len(lstBFeat)))
 
 def Date2Int(datetimeObj):
     return int('{}{:02d}'.format(datetimeObj.year, datetimeObj.month))
-
-def SimplifyGeom(geomIn,rdpEpsi):
-    '''
-    Compute simplify geometry of a given footprint coordinates. The simplify 
-    geometry is the 4 corner points starting at the North-West corner. This is
-    a complicated algorithm which may fail easily:
-        -Douglas-Peucker
-        -Centroid from wieghted average (distance to other point sum, squared)
-        -Distance to centroid and quadrant space division
-        -Per quadrant:
-            -Grading all available points based on:
-                * +1: longer distance to centroid
-                * +1: extremum in longitude
-                * +1: extremum in latitude
-                * +2: larger distance to others sum
-            -Select the best point
-        -Add the loop closing point (first=last)
-
-
-    geomIn (list of (x,y)): footprint coordinates
-
-    out:
-        geomOut ((list of (x,y))): simplify footprint coordinates (closed loop with 5 points)
-    '''
-    geomIn=np.array(geomIn[:-1])
-    geomDP=rdp(geomIn, epsilon=rdpEpsi)
-    
-    nb=geomDP.shape[0]
-    # Distance to other points
-    tableDistOther=np.array([sum(np.sum((geomDP-geomDP[k,:])**2, axis=1)**0.5) for k in range(nb)])
-    # Weighted average centre (weight=powered distance)
-    centre=np.average(geomDP, axis=0, weights=tableDistOther**2)
-    diffPts=geomDP-centre
-    tableDiff=np.hstack(((diffPts[:,[0]]>0), 
-                         (diffPts[:,[1]]>0), 
-                         (np.sum(diffPts**2, axis=1)**0.5).reshape(nb,1)))
-    
-    geomOut=[]
-    # Grading exterior points
-    for delta0Posi,delta1Posi in ((1,0), (1,1), (0,1), (0,0)):
-        indPts=[k for k in range(nb) if tableDiff[k,0]==delta0Posi and tableDiff[k,1]==delta1Posi]
-        
-        #DisplayFootprint(geomIn,geomDP,centre)
-        if not indPts:
-            DisplayFootprint(geomIn,geomDP,centre)
-            strOut='centre error, no point in quadrant %i %i:'% (delta0Posi,delta1Posi)
-            strOut+='\nInput geometry (%i pts)\n'% geomIn.shape[0]
-            strOut+=str(geomIn)
-            strOut+='\nDP geometry (%i pts)\n'% geomDP.shape[0]
-            strOut+=str(geomDP)
-            strOut+='\nWeight\n'+str(tableDistOther**2)
-            strOut+='\nCentre\n'+str(centre)
-            SubLogger('CRITICAL', strOut)
-        
-        if len(indPts)==1:
-            indMax=indPts[0]
-        else:
-            grade=[0]*len(indPts)
-            #print('ind', indPts)
-            
-            # Distance
-            grade[np.argsort(tableDiff[indPts,2])[-1]]+=1
-            #print('Distance', tableDiff[indPts,2])
-            #print('c', grade)
-            
-            # Extrem Long 
-            grade[np.argsort(geomDP[indPts,0])[-delta0Posi]]+=1
-            #print('Extrem Long', geomDP[indPts,0], '=>', np.argsort(geomDP[indPts,0]))
-            #print('c', grade)
-            
-            # Extrem Lat
-            grade[np.argsort(geomDP[indPts,1])[-delta1Posi]]+=1
-            #print('Extrem Lat', geomDP[indPts,1], '=>', np.argsort(geomDP[indPts,1]))
-            #print('c', grade)
-            
-            # Dist to others
-            grade[np.argsort(tableDistOther[indPts])[-1]]+=2
-            #print('Dist to others', tableDistOther[indPts])
-            #print('c', grade)
-
-            indMax=indPts[grade.index(max(grade))]
-            #print(indMax)
-        geomOut.append(list(geomDP[indMax,:]))
-        
-        #input('SimplifyGeom')
-
-
-    if not len(geomOut)==4:
-        strOut='footprint reconstruction error, only %i points'% len(geomOut)
-        strOut+='\nInput geometry (%i pts)\n'% geomIn.shape[0]
-        strOut+=str(geomIn)
-        strOut+='\nDP geometry (%i pts)\n'% geomDP.shape[0]
-        strOut+=str(geomDP)
-        strOut+='\nOutput geometry (%i pts)\n'% geomOut.shape[0]
-        strOut+=str(geomOut)
-        SubLogger('CRITICAL', strOut)
-    else:
-        geomOut.append(geomOut[0])
-    
-    return geomOut
 
 def DisplayFootprint(geom1,geom2,centre):
     import matplotlib.pyplot as plt
@@ -677,6 +349,279 @@ def RatioBH(descrip1, descrip2):
     height=(descrip1['properties']['sat:alt_km']+descrip2['properties']['sat:alt_km'])/2*1e3
 
     return base/height
+
+def Coverage(pathIn,  featAoi, lstBName=False):
+    '''
+    Compute the number of scene per ground sample and 
+    stereopair (if available). It is written down laster 
+    by the WriteBlocks function.
+
+    featAoi (json): orignal AOI feature used as mask
+    lstBName (list): list of block name (default: False means all)
+    out:
+        objBlock (class): updated object
+            lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
+    '''
+    def Geometry_Stack(shapeCur, transfCur, featIn):
+        '''
+        Add geometry per ground sample. It is write down laster by the WriteBlocks function.
+
+        shapeCur (tuple): frame shape (row, column)
+        transfCur (Affine): image transformation
+        featIn (lst): list of geometry to stack
+        out:
+            frameOut (np.array): counting image frame
+        '''
+        from rasterio.features import rasterize
+        from rasterio.enums import MergeAlg
+        nbFeat=len(featIn)
+        frameOut=np.zeros(shapeCur, dtype=np.uint16)
+
+        # Add scene
+        procBar=ProcessStdout(name='Geometry_Stack',inputCur=nbFeat)
+        for i in range(nbFeat):
+            procBar.ViewBar(i)
+            rasterize((featIn[i]['geometry'],),
+                        out_shape=shapeCur,
+                        out=frameOut,
+                        fill=0,
+                        all_touched=True,
+                        transform=transfCur,
+                        merge_alg=MergeAlg.add,
+                        default_value=1,
+                        dtype=np.uint16,
+                        )
+            
+        return frameOut
+
+    objInfo=SceneBlocks([], pathIn, 'info')
+    if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
+
+    if lstBName:
+        lstBId=[objInfo.lstBId.index(blockCur) for blockCur in objInfo.lstBId if blockCur[0] in lstBName]
+    else: 
+        lstBId=range(objInfo.nbB)
+
+    for bI in lstBId:
+        nameB, nbFeat=objInfo.lstBId[bI]
+        SubLogger('INFO', nameB)
+        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+          
+        geomAoiJson=featAoi['features'][0]['geometry']
+        geomAoi=Polygon(geomAoiJson['coordinates'][0][0])
+
+        boundsGeomAoi=geomAoi.bounds
+        boundsAoi=[item//imageGsd*imageGsd+k//2*imageGsd for k,item in enumerate(boundsGeomAoi)]
+        shapeAoi=(int((boundsAoi[3]-boundsAoi[1])/imageGsd), int((boundsAoi[2]-boundsAoi[0])/imageGsd))
+        transfAoi=from_origin(boundsAoi[0],boundsAoi[-1],imageGsd,imageGsd)
+        
+        # Mask to AOI
+        frameMask=geometry_mask((geomAoiJson,), 
+                                shapeAoi,
+                                transfAoi,
+                                all_touched=True,
+                                invert=True,
+                                ).astype(np.uint16)
+        
+        # Update and store image profile
+        profileImg=profileCoverTif.copy()
+        profileImg['height'],profileImg['width']=shapeAoi
+        profileImg['transform']=transfAoi
+        profileImg['crs']=CRS.from_epsg(4326)
+
+        # Compute scene pair count
+        frameGeomStack=Geometry_Stack(shapeAoi, transfAoi, objCur.lstBFeat[0])
+
+        # Coverage tif
+        pathOut= os.path.join(objInfo.dirOut, nameB, fileCov.format(nameB))
+        if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+
+        with rasterio.open(pathOut,'w',**profileImg) as imgOut:
+            imgOut.write(frameGeomStack*frameMask, 1)
+            imgOut.set_band_description(1, 'Scene count')
+
+        del frameGeomStack, frameMask, objCur
+
+def StereoCoupling(pathIn, lstBName=False, moreComb=False):
+    '''
+    Create list of stereo scene pairs, triplet, etc
+    
+    lstBName (lst): list of block name (default: False means all)
+    moreComb (bool): compute triplets and higher scene combinaisons (default: False) 
+    out:
+        objBlock (class): updated object
+            lstBCouple (list): list of json stereo pairs
+    '''
+    from copy import deepcopy
+    lstKeysBH=('ecefX_m', 'ecefY_m', 'ecefZ_m', 'sat:alt_km')
+    objInfo=SceneBlocks([], pathIn, 'info')
+    if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
+
+    if lstBName:
+        lstBId=[objInfo.lstBId.index(blockCur) for blockCur in objInfo.lstBId if blockCur[0] in lstBName]
+    else: 
+        lstBId=range(objInfo.nbB)
+
+    for bI in lstBId:
+        nameB, nbFeat=objInfo.lstBId[bI]
+        SubLogger('INFO', nameB)
+        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+
+        # Geometry check
+        try:
+            lstCheckGeom=[Polygon(np.array(feat['geometry']['coordinates']).reshape(-1,2).tolist()).is_valid for feat in objCur.lstBFeat[0]]
+        except shapelyTopoE as msg:
+            SubLogger('CRITICAL','%s footprint error:\n%s'% (feat['id'], msg))
+        if not all(lstCheckGeom): SubLogger('CRITICAL','%s footprint error, please correct it manually'% objCur.lstBFeat[0][lstCheckGeom.index(False)]['id'])
+
+        # Output file
+        pathOut= os.path.join(objCur.dirOut, nameB, fileStereo.format(nameB))
+        if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
+        objOut=tempGeojson.copy()
+        objOut['name']=fileStereo.format(nameB).split('.')[0]
+        del objOut['Features']
+        strOut=json.dumps(objOut, indent=2)
+        
+        fileOut=open(pathOut,'w')
+        fileOut.write(strOut[:-2])
+        fileOut.write(',\n  "Features":[\n')
+
+        lstBCouple=[]
+
+        lstK=[0]
+        # Pairs
+        k=-1
+        for i in range(nbFeat):
+            feat1=objCur.lstBFeat[0][i]
+            coords1=np.array(feat1['geometry']['coordinates']).reshape(-1,2).tolist()
+            geom1=Polygon(coords1)
+
+            for j in range(i+1,nbFeat):
+                feat2=objCur.lstBFeat[0][j]
+                coords2=np.array(feat2['geometry']['coordinates']).reshape(-1,2).tolist()
+                geom2=Polygon(coords2)
+
+                if not geom1.intersects(geom2): continue
+                try:
+                    geomInters=geom1.intersection(geom2)
+                except shapelyTopoE:
+                    continue                    
+
+                # New intersection
+                k+=1
+                newCouple=tempDescripPair.copy()
+                newCouple['id']=k
+                newCouple['properties']['id']=k
+                newCouple['properties']['nbScene']=2
+                newCouple['properties']['scenes']='%s;%s'% (feat1['id'], feat2['id'])
+                newCouple['properties']['scenesI']='%i;%i'% (i, j)
+                
+                # New B/H
+                checkAttrib=[key in feat1['properties'].keys() for key in lstKeysBH]
+                checkAttrib+=[key in feat2['properties'].keys() for key in lstKeysBH]
+                if all(checkAttrib): newCouple['properties']['bh']=RatioBH(feat1,feat2)
+
+
+                newCouple["geometry"]["type"]= geomInters.geom_type
+
+                if geomInters.geom_type=='Polygon' :
+                    lstCoords=[list(geomInters.exterior.coords)]
+                    newCouple['properties']['area']=geomInters.area
+
+                elif geomInters.geom_type=='MultiPolygon':
+                    lstArea=[geomPart.area for geomPart in geomInters.geoms if geomPart.geom_type=='Polygon']
+                    lstCoords=[list(geomInters[lstArea.index(max(lstArea))].exterior.coords),]
+                    newCouple['properties']['area']=sum(lstArea)
+                    
+                else:
+                    print(list(geomInters.geoms))
+                    SubLogger('CRITICAL', '%s not managed'% geomInters.geom_type)
+
+                newCouple['geometry']['coordinates']=lstCoords
+
+                lineEnd=',\n'
+                if not k: lineEnd=''
+                fileOut.write(lineEnd+json.dumps(newCouple))
+                lstBCouple.append(deepcopy(newCouple))
+
+        SubLogger('INFO', '%i combinaisons (%i)'% (k+1, 2))
+        lstK.append(k)
+
+        # More combinaisons based on pairs
+        keepComb=True
+        l=2
+        while moreComb and keepComb:
+            l+=1
+            keepComb=False
+            for i in range(lstK[-2], lstK[-1]+1):
+                comb1=lstBCouple[i]
+                coords1=np.array(comb1['geometry']['coordinates']).reshape(-1,2).tolist()
+                geom1=Polygon(coords1)
+                i0=[int(j) for j in comb1['properties']['scenesI'].split(';')]
+                
+                for j in range(max(i0),nbFeat):
+                    if j in i0: continue
+                    feat2=objCur.lstBFeat[0][j]
+                    coords2=np.array(feat2['geometry']['coordinates']).reshape(-1,2).tolist()
+                    geom2=Polygon(coords2)
+                    if not geom1.intersects(geom2): continue
+
+                    keepComb=True
+                    # New intersection
+                    k+=1
+                    newCouple=tempDescripPair.copy()
+                    newCouple['id']=k
+                    newCouple['properties']['id']=k
+                    newCouple['properties']['nbScene']=comb1['properties']['nbScene']+1
+                    newCouple['properties']['scenes']='%s;%s'% (comb1['properties']['scenes'], feat2['id'])
+                    lstIFeat=comb1['properties']['scenesI'].split(';')+[str(j)]
+                    newCouple['properties']['scenesI']=';'.join(lstIFeat)
+                    ####################
+                    # New B/H: just for info
+                    # Caution: the mean does not take care of MVS
+                    lstBH=[]
+                    for strIFeat in lstIFeat[:-1]:
+                        iFeat=int(strIFeat)
+                        feat1=objCur.lstBFeat[0][iFeat]
+                        checkAttrib=[key in feat1['properties'] for key in lstKeysBH]
+                        checkAttrib+=[key in feat2['properties'] for key in lstKeysBH]
+                    
+                    if all(checkAttrib): 
+                        lstBH.append(RatioBH(feat1,feat2))
+                        meanBH=sum(lstBH)/len(lstBH)
+                        newCouple['properties']['bh']=(comb1['properties']['bh']*(l-1)+meanBH)/l
+                    else:
+                        newCouple['properties']['bh']=-1
+
+                    # New geometry 
+                    geomInters=geom1.intersection(geom2)
+                    newCouple["geometry"]["type"]= geomInters.geom_type
+                    
+                    if geomInters.geom_type=='Polygon' :
+                        lstCoords=[list(geomInters.exterior.coords)]
+                        newCouple['properties']['area']=geomInters.area
+                    
+                    elif geomInters.geom_type=='MultiPolygon':
+                        lstArea=[geomPart.area for geomPart in geomInters.geoms if geomPart.geom_type=='Polygon']
+                        lstCoords=[list(geomInters[lstArea.index(max(lstArea))].exterior.coords),]
+                        newCouple['properties']['area']=sum(lstArea)
+
+                    else:
+                        SubLogger('CRITICAL', '%s no managed'% geomInters.geom_type)
+
+                    newCouple['geometry']['coordinates']=lstCoords
+                    
+                    lineEnd=',\n'
+                    fileOut.write(lineEnd+json.dumps(newCouple))
+                    lstBCouple.append(deepcopy(newCouple))
+
+            SubLogger('INFO', '%i combinations (%i scenes => +%i)'% (k+1, l, k-lstK[-1]))
+            lstK.append(k)
+        
+        fileOut.write(']\n}')
+        fileOut.close()
+
+        del lstBCouple, objOut, objCur
 
 #=======================================================================
 #main

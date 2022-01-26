@@ -59,7 +59,7 @@ def SingleBandImg(pathIn, pathOut, imgType='green'):
     '''
     if imgType=='green':
         cmd='gdal_translate -b 2 -of GTiff -co PROFILE=BASELINE -q %s %s'% (pathIn, pathOut)
-        cmd+=' ; rm {0}/*.RPB ; rm {0}/*.tif.aux.xml'.format(os.path.dirname(pathOut))
+        cmd+=' ; rm {0}RPB ; rm {0}tif.aux.xml'.format(pathOut[:-3])
         return os.system(cmd)
     elif imgType=='hsv':
         img = cv.imread(pathIn, cv.IMREAD_LOAD_GDAL+(-1)) # equivalent to 'cv.IMREAD_ANYDEPTH + cv.IMREAD_COLOR'
@@ -94,7 +94,33 @@ def SingleBandImg(pathIn, pathOut, imgType='green'):
         cv.imwrite(pathOut, imgHLS[:,:,1])
     else:
         SubLogger('CRITICAL', 'Unknown imgType: %s'% imgType)
-        
+ 
+def EllipsoidalRPC(pathRpcIn, pathRpcOut, pathGeoid):
+    '''
+    Compute an RPC using ellispoidal height. 
+    
+    pathRpcIn (str): input RPC path (from planet)
+    pathRpcOut (str): output RPC path (with geoid included)
+    pathGeoid (str): geoid path 
+    out:
+        0 (int)
+    ''' 
+    rpcIn=GeomFunc.RPCin(pathRpcIn)
+    rpcOut=GeomFunc.RPCin.InputNorm(GeomFunc.RPCin(), rpcIn.Offset(), rpcIn.Scale())
+
+    meshRange=np.meshgrid(np.linspace(-1.0, 1.0, num=11), # Long
+                          np.linspace(-1.0, 1.0, num=11), # Lat
+                          np.linspace(-0.2, 0.2, num=11)) # H
+    matPtsGeo_Alti=np.vstack((meshRange[0].flatten(), meshRange[1].flatten(), meshRange[2].flatten())).T*rpcIn.Scale(d=3)+rpcIn.Offset(d=3)
+    matPtsImg=rpcIn.Obj2Img(matPtsGeo_Alti)
+    matPtsGeo_EH=GeomFunc.Alti2ElliH(matPtsGeo_Alti, pathGeoid)
+    rpcOut.Comput_RPC(matPtsGeo_EH, matPtsImg)
+
+    with open(pathRpcOut,'w') as fileOut:
+        fileOut.writelines(rpcOut.__write__())
+
+    return 0
+            
 def SubArgs_Ortho(pathImgIn, pathModIn, pathDemIn, pathOrthoOut, epsg=4326):
     '''
     Create a list of mapproject parameters
@@ -136,11 +162,11 @@ def SubArgs_Ortho(pathImgIn, pathModIn, pathDemIn, pathOrthoOut, epsg=4326):
 
     return subArgs
 
-def SubArgs_StereoKP_RPC(pathObj, lstPath, softness=0):
+def SubArgs_StereoKP_RPC(prefOut, lstPath, softness=0):
     '''
     Create a list of stereo_pprc parameters for key point extraction per pair
 
-    pathObj (obj): PathCur class from VarCur
+    prefOut (str): output prefix
     lstPath ([(ImgPath, RpcPath), (ImgPath, RpcPath)]): list of path after mask
     softness (int [0-2]): interger designing feature filtering parameter set hardness, 0:hard 2:soft (release freedom)
     out:
@@ -159,10 +185,10 @@ def SubArgs_StereoKP_RPC(pathObj, lstPath, softness=0):
 
     subArgs=[imgPath for imgPath, rpcPath in lstPath]
     
-    dirOut=os.path.dirname(pathObj.prefStereoKP)
+    dirOut=os.path.dirname(prefOut)
     
     if os.path.exists(dirOut): os.system('rm -r %s'% dirOut)
-    subArgs.append(pathObj.prefStereoKP)
+    subArgs.append(prefOut)
     
     # Arguments
     subArgs+=[## Basics
@@ -195,7 +221,7 @@ def SubArgs_StereoKP_RPC(pathObj, lstPath, softness=0):
                 #'--stop-point', '2', # Stop the stereo pipeline 
                 ]
     if softness==3: subArgs+= ['--ip-per-tile', '1000'] # key point number per sub frame
-    
+
     return subArgs
 
 def SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, pathDemIn, pathRpcOut, prefBA=None):
@@ -229,7 +255,86 @@ def SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, pathDemIn, pathRpcOut, prefBA=None):
     
     return subArgs
 
-def SubArgs_Camgen(sceneId, pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'):
+def StereoDescriptor(pathObj, lstPairs):
+    '''
+    Create a txt file with stereo pair per lines. It is used by bundle_adjust
+
+    pathObj (obj): PathCur class from VarCur
+    featCur (json): current couple desciptor
+    out:
+        0 : pathObj.pStereoLst file created
+    '''
+    # Availability
+    grepImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format('*'))
+    lstImgAvai=[os.path.basename(pathCur) for pathCur in glob(grepImg)]
+    lstImgAvai.sort()
+    
+    lstOut=[]
+    nbComb=len(lstPairs)
+    for i in range(nbComb):
+        comb=lstPairs[i]
+        if not comb['properties']['nbScene']==2: continue
+
+        lstSceneCur=[pathObj.extFeat1B.format(scenId) for scenId in comb['properties']['scenes'].split(';')]
+        if not all([sceneName in lstImgAvai for sceneName in lstSceneCur]): continue
+        
+        lstScenePath=[os.path.join(pathObj.pProcData,sceneName) for sceneName in lstSceneCur]
+        lstOut.append(' '.join(lstScenePath)+'\n')
+    
+    if not lstOut: SubLogger('CRITICAL', 'stereo list is empty, no scene is available')
+    with open(pathObj.pStereoLst, 'w') as fileOut:
+                    fileOut.writelines(lstOut)
+    return 0
+
+def AspPnP_RPCwithoutDisto(sceneId, pathRpcIn, pathRpcOut):
+    '''
+    Create RPC without distortion in. It makes uses of Tsai object to undistort
+    points.
+    
+    sceneId (str): scene ID text
+    pathRpcIn (str): RPC path
+    pathRpcOut (str): path corrected RPC 
+    out:
+        0 (int)
+    '''
+    # Create objects
+    objRpcIn=GeomFunc.RPCin(pathRpcIn)
+    
+    emptyCam={'fu': camFocal,
+              'fv': camFocal,
+              'cu': camCentre[0],
+              'cv': camCentre[1],
+              'pitch': camPitch,
+              'distoType': 'NULL'}
+    objCam=GeomFunc.TSAIin(emptyCam)
+
+    # Update distortion model
+    hardwId=sceneId.split('_')[-1]
+    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'photometrix'):
+        setattr(objCam, keyNew, valNew)
+    
+    # Point pairs
+    # grid from image
+    meshRange=np.meshgrid(np.linspace(-1.0, 1.0, num=11), # x
+                          np.linspace(-1.0, 1.0, num=11), # y
+                          np.linspace(-0.2, 0.2, num=11)) # H
+    matPtsImg_d=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T*objRpcIn.Scale(d=2)+objRpcIn.Offset(d=2)
+    matPtsH=meshRange[2].reshape(-1,1)*objRpcIn.heiScale+objRpcIn.heiOffset
+    objRpcIn.Comput_InvRPC()
+    matPtsGeo=objRpcIn.Img2Obj_Z(matPtsImg_d,matPtsH)
+    matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
+    nbPts=matPtsCart.shape[0]
+
+    matPtsImg_u=objCam.ApplyDisto('remove', matPtsImg_d)
+
+    objRpcIn.Comput_RPC(matPtsGeo, matPtsImg_u)
+    
+    with open(pathRpcOut, 'w') as fileOut:
+        fileOut.writelines(objRpcIn.__write__())
+
+    return 0
+
+def AspPnP_SubArgs_Camgen(sceneId, pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern='circle'):
     '''
     Create a list of cam_gen parameters
 
@@ -299,86 +404,7 @@ def SubArgs_Camgen(sceneId, pathImgIn, pathRpcIn, pathDemIn, pathCamOut, pattern
     
     return subArgs
 
-def StereoDescriptor(pathObj, lstPairs):
-    '''
-    Create a txt file with stereo pair per lines. It is used by bundle_adjust
-
-    pathObj (obj): PathCur class from VarCur
-    featCur (json): current couple desciptor
-    out:
-        0 : pathObj.pStereoLst file created
-    '''
-    # Availability
-    grepImg=os.path.join(pathObj.pProcData, pathObj.extFeat1B.format('*'))
-    lstImgAvai=[os.path.basename(pathCur) for pathCur in glob(grepImg)]
-    lstImgAvai.sort()
-    
-    lstOut=[]
-    nbComb=len(lstPairs)
-    for i in range(nbComb):
-        comb=lstPairs[i]
-        if not comb['properties']['nbScene']==2: continue
-
-        lstSceneCur=[pathObj.extFeat1B.format(scenId) for scenId in comb['properties']['scenes'].split(';')]
-        if not all([sceneName in lstImgAvai for sceneName in lstSceneCur]): continue
-        
-        lstScenePath=[os.path.join(pathObj.pProcData,sceneName) for sceneName in lstSceneCur]
-        lstOut.append(' '.join(lstScenePath)+'\n')
-    
-    if not lstOut: SubLogger('CRITICAL', 'stereo list is empty, no scene is available')
-    with open(pathObj.pStereoLst, 'w') as fileOut:
-                    fileOut.writelines(lstOut)
-    return 0
-
-def RPCwithoutDisto(sceneId, pathRpcIn, pathRpcOut):
-    '''
-    Create RPC without distortion in. It makes uses of Tsai object to undistort
-    points.
-    
-    sceneId (str): scene ID text
-    pathRpcIn (str): RPC path
-    pathRpcOut (str): path corrected RPC 
-    out:
-        0 (int)
-    '''
-    # Create objects
-    objRpcIn=GeomFunc.RPCin(pathRpcIn)
-    
-    emptyCam={'fu': camFocal,
-              'fv': camFocal,
-              'cu': camCentre[0],
-              'cv': camCentre[1],
-              'pitch': camPitch,
-              'distoType': 'NULL'}
-    objCam=GeomFunc.TSAIin(emptyCam)
-
-    # Update distortion model
-    hardwId=sceneId.split('_')[-1]
-    for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'photometrix'):
-        setattr(objCam, keyNew, valNew)
-    
-    # Point pairs
-    # grid from image
-    meshRange=np.meshgrid(np.linspace(-1.0, 1.0, num=11), # x
-                          np.linspace(-1.0, 1.0, num=11), # y
-                          np.linspace(-0.2, 0.2, num=11)) # H
-    matPtsImg_d=np.vstack((meshRange[0].flatten(), meshRange[1].flatten())).T*objRpcIn.Scale(d=2)+objRpcIn.Offset(d=2)
-    matPtsH=meshRange[2].reshape(-1,1)*objRpcIn.heiScale+objRpcIn.heiOffset
-    objRpcIn.Comput_InvRPC()
-    matPtsGeo=objRpcIn.Img2Obj_Z(matPtsImg_d,matPtsH)
-    matPtsCart=GeomFunc.Geo2Cart_Elli(matPtsGeo)
-    nbPts=matPtsCart.shape[0]
-
-    matPtsImg_u=objCam.ApplyDisto('remove', matPtsImg_d)
-
-    objRpcIn.Comput_RPC(matPtsGeo, matPtsImg_u)
-    
-    with open(pathRpcOut, 'w') as fileOut:
-        fileOut.writelines(objRpcIn.__write__())
-
-    return 0
-
-def ConvertPM(sceneId, pathImgIn, pathCamIn, pathCamOut):
+def AspPnP_ConvertPM(sceneId, pathImgIn, pathCamIn, pathCamOut):
     '''
     Include the right distortin model in a given PM.
     
@@ -392,6 +418,7 @@ def ConvertPM(sceneId, pathImgIn, pathCamIn, pathCamOut):
     
     # Update distortion model
     hardwId=sceneId.split('_')[-1]
+    SubLogger('CRITICAL', 'Need L1A offset')
     for keyNew, valNew in pipelDFunc.ExtractDisto(hardwId, 'tsai'):
         setattr(objCamOut, keyNew, valNew)
 
@@ -406,7 +433,7 @@ def ConvertPM(sceneId, pathImgIn, pathCamIn, pathCamOut):
 
     return 0
 
-def SRS_OCV(sceneId, pathImgIn, pathRpcIn, pathCamOut):
+def SRS_OCV(sceneId, pathRpcIn, pathCamOut):
     '''
     Run a spatial resection approximating the input RPC.
     It is based on solvePnP function from OpenCV.
@@ -430,7 +457,7 @@ def SRS_OCV(sceneId, pathImgIn, pathRpcIn, pathCamOut):
     objCamOut=GeomFunc.TSAIin(emptyCam)
     
     # Update distortion model
-    for keyNew, valNew in pipelDFunc.ExtractDisto(sceneId, 'tsai', scenePath=pathImgIn):
+    for keyNew, valNew in pipelDFunc.ExtractDisto(sceneId, 'tsai', rpcPath=pathRpcIn):
         setattr(objCamOut, keyNew, valNew)
     
     setattr(objCamOut, 'matK', np.array([[objCamOut.fu, 0           , objCamOut.cu   ],
@@ -495,31 +522,31 @@ class SubArgs_BunAdj:
         SubArgs_BunAdj (obj):
             KeyPoints (funct):
     '''
-    argsInit=[  ## Basics
-                '--datum', 'WGS_1984', # set datum
-                '--nodata-value', '0', # nodata, do not process <= x
-                '--threads', '1', # make deterministic bundle adjustment 
-                #'--input-adjustments-prefix', path # initial camera transform
-                # : read "adjust" files with that prefix
-                # Caution cannot be coupled with --inline-adj (so no distortion)
-                
-                ## Key points
-                '--min-matches', '10', # min key point pairs
-                
-                ## Model: 'Any weight set in the model must balance another one (never a single weight)'
-                '--disable-pinhole-gcp-init', # do initialise camera from GCP files
+    def __init__(self, pathOverlap, dirProcData, dirData, lstId, extImg, extRpc, extRpc1b, extTsai, mode):
+        self.argsInit=[ ## Basics
+                        '--datum', 'WGS_1984', # set datum
+                        '--nodata-value', '0', # nodata, do not process <= x
+                        '--threads', '1', # make deterministic bundle adjustment 
+                        #'--input-adjustments-prefix', path # initial camera transform
+                        # : read "adjust" files with that prefix
+                        # Caution cannot be coupled with --inline-adj (so no distortion)
+                        
+                        ## Key points
+                        '--min-matches', '10', # min key point pairs
+                        
+                        ## Model: 'Any weight set in the model must balance another one (never a single weight)'
+                        '--disable-pinhole-gcp-init', # do initialise camera from GCP files
 
-                ## Intrinsic imporvement
-                
-                ## Least square
-                '--num-passes', '1', # iteration number
-                
-                ## Storage
-                #'--report-level', '20',
-                '--save-cnet-as-csv', # Save key points in gcp point format
-                ]
+                        ## Intrinsic imporvement
+                        
+                        ## Least square
+                        '--num-passes', '1', # iteration number
+                        
+                        ## Storage
+                        #'--report-level', '20',
+                        '--save-cnet-as-csv', # Save key points in gcp point format
+                        ]
 
-    def __init__(self, pathObj, lstId, mode):
         # Mode
         if mode=='rpc':
             self.argsInit+=['-t', 'rpc', # set stereo session pinhole OR nadirpinhole
@@ -528,35 +555,33 @@ class SubArgs_BunAdj:
             self.argsInit+=['-t', 'nadirpinhole', # set stereo session pinhole OR nadirpinhole
                             '--inline-adjustments', # Store result in .tsai, not in adjsut
                             ]
-        self.pathDem=pathObj.pDem
 
         # Stereo list
-        self.argsInit+=['--overlap-list', pathObj.pStereoLst,] # stereopair file for key point extraction
+        self.argsInit+=['--overlap-list', pathOverlap,] # stereopair file for key point extraction
             #OR
         #self.argsInit+=['--position-filter-dist', 'XXm',] # image couple for key point based on centre distance
         
         # Scenes
         if not type(lstId)==list : SubLogger('CRITICAL', 'Image list (lstId) must be a list of image id')
         lstId.sort()
-        lstImgPath=[os.path.join(pathObj.pProcData, pathObj.extFeat1B.format(idCur)) 
+        lstImgPath=[os.path.join(dirProcData, extImg.format(idCur)) 
                         for idCur in lstId]
         if not all([os.path.exists(pathCur) for pathCur in lstImgPath]): SubLogger('CRITICAL', 'Image(s) not found' )
         self.nbScene=len(lstImgPath)
         self.argsInit+=lstImgPath
 
         # RPC
-        lstRPCPath=[os.path.join(pathObj.pData, pathObj.extRpc.format(idCur)) 
+        lstRPCPath=[os.path.join(dirData, extRpc.format(idCur)) 
                             for idCur in lstId]
         if not all([os.path.exists(pathCur) for pathCur in lstRPCPath]): SubLogger('CRITICAL', 'RPC(s) not found' )
-        lstRPCUse=[os.path.join(pathObj.pProcData, pathObj.extRpc1B.format(idCur)) 
+        lstRPCUse=[os.path.join(dirProcData, extRpc1b.format(idCur)) 
                             for idCur in lstId]
         self.zipRPC=tuple(zip(lstRPCPath, lstRPCUse))
 
         # Cameras
-        self.lstTsaiName=[pathObj.nTsai[1].format(idCur) 
-                                for idCur in lstId]       
+        self.lstTsaiName=[extTsai.format(idCur) for idCur in lstId]       
 
-    def KP_RPC(self, prefIn, prefOut):
+    def KP_RPC(self, prefIn, prefOut, pathDem):
         '''
         Feature extraction merging bundle adjustment. It compute a fixed bundle adjustment
         using the existing .match file and returns the initial coordinates.
@@ -582,7 +607,7 @@ class SubArgs_BunAdj:
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
-                '--heights-from-dem', self.pathDem, # fix key point height from DSM
+                '--heights-from-dem', pathDem, # fix key point height from DSM
                 '--heights-from-dem-weight', '1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 '--camera-weight', '1', # EO weight (x>1 -> stiffer)
                 '--fixed-camera-indices', "'%s'"% strInd, # fixed camera i
@@ -595,7 +620,7 @@ class SubArgs_BunAdj:
 
         return args
 
-    def EO_RPC(self, prefIn, prefOut):
+    def EO_RPC(self, prefIn, prefOut, pathDem):
         '''
         Adjust RPC and return .adjust file
         '''
@@ -609,7 +634,7 @@ class SubArgs_BunAdj:
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
-                '--heights-from-dem', self.pathDem, # fix key point height from DSM
+                '--heights-from-dem', pathDem, # fix key point height from DSM
                 '--heights-from-dem-weight', '1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 '--camera-weight', '0.1', # EO weight (x>1 -> stiffer)
                 ## Least square
@@ -804,13 +829,13 @@ class SubArgs_BunAdj:
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
-                #'--heights-from-dem', self.pathDem, # fix key point height from DSM
+                #'--heights-from-dem', pathDem, # fix key point height from DSM
                 #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 #'--rotation-weight', '1', 
                 #'--translation-weight', '0', # EO weight (x>0 -> stiffer) or
-                #'--camera-weight', '100', # EO weight (x>1 -> stiffer)
+                '--camera-weight', '2', # EO weight (x>1 -> stiffer)
                 ## Least square
-                '--remove-outliers-params','"80.0 1.0 2.0 3.0"',
+                '--remove-outliers-params','"90.0 1.0 1.0 2.0"',
                 #'--robust-threshold', '1000', # set cost function threshold
                 #'--max-disp-error', '1', # with ref DSM
                 ## Least square
@@ -839,7 +864,7 @@ class SubArgs_BunAdj:
                 '--force-reuse-match-files', # use former match file: using -o prefix
                 '--skip-matching', # skip key points creation part if the no match file found: complementary to --overlap-list
                 ## Model
-                #'--heights-from-dem', self.pathDem, # fix key point height from DSM
+                #'--heights-from-dem', pathDem, # fix key point height from DSM
                 #'--heights-from-dem-weight', '0.1', # weight of key point height from DSM: need a balancing wieght (camera), no need to fix more than 1
                 #'--rotation-weight', '1', 
                 #'--translation-weight', '0', # EO weight (x>0 -> stiffer)
@@ -848,7 +873,7 @@ class SubArgs_BunAdj:
                 '--solve-intrinsics', # include IO in BA (default=False) 
                 '--intrinsics-to-float', '"optical_center"', # "'focal_length optical_center other_intrinsics' ", # list of IO param to solve
                 #'--intrinsics-to-share', '"other_intrinsics"', # "'focal_length optical_center other_intrinsics' ", # list of common IO param
-                #'--reference-terrain', self.pathDem, # use a reference terrain to create points for instrinsic adjust: needs disparities map list
+                #'--reference-terrain', pathDem, # use a reference terrain to create points for instrinsic adjust: needs disparities map list
                 #'--disparity-list', 'file name chaine as string', # list of disparity map paths: for reference terrain
                 #'--reference-terrain-weight', '1',
                 ## Least square
@@ -958,7 +983,7 @@ def CopyPrevBA(prefIn, prefOut, dirExists=True, img=True, kp='match', dispExists
     
     return 0
 
-def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=0):
+def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=-1):
     '''
     Reads a cnet.csv file, changes the point accuracy (ECEF Std Dev),
     saves it to the Ba folder with gcp extention. Useful for BA with 
@@ -974,14 +999,15 @@ def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=0):
         Long (+/-)
         Height (+/-)
         Nb obs (+/-)
-    The default nbPts=0 means all points
+        random 
+    The default nbPts=-1 means all points
 
 
     pathIn (str): input cnet path
     prefOut (str): output prefix
     accuXYZ (float): ground accuracy (ECEF Std Dev) [m] (default: 1)
     accuI (float): image accuracy (x, y) [pxl] (default: 1)
-    nbPts (int): number of point per characteritsic (default: 0)
+    nbPts (int): number of point per characteritsic (default: alls)
     out:
         pathOut (str): path of the new file
     '''
@@ -998,10 +1024,11 @@ def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=0):
     pathOut=prefOut+'-KP2GCP_XYZ%i_I%i.gcp'% (accuXYZ, accuI)
     fileOut=open(pathOut, 'w')
 
-    # Point selection from characteristics:
-    if not nbPts:
+    
+    if nbPts<0: # Select all points
         iPts=range(len(lstIn))
-    else:
+
+    else: # Point selection from characteristics
         matChara=np.array([lineCur[1:4]+[(len(lineCur)-lenG)//lenI, ] 
                                     for lineCur in lstIn],
                             dtype=float)
@@ -1013,7 +1040,10 @@ def KpCsv2Gcp(pathIn, prefOut, accuXYZ=1, accuI=1, nbPts=0):
             iOfIRandom=np.random.random_integers(0, int(0.01*len(lstIn)), 2*nbPts)
             iSorted=np.argsort(matChara[:,iCol])
             iPts+=list(iSorted[iOfIRandom[:nbPts]])+list(iSorted[-iOfIRandom[nbPts:]])
-    
+        
+        # And random point selection
+        iPts+=list(np.random.random_integers(0, len(lstIn), nbPts))
+        
     for iPt in iPts:
         ptIn=lstIn[iPt]
         ptOut=[]
@@ -1071,382 +1101,4 @@ def DisplayMat(mat):
 if __name__ == "__main__":
     print('\nFunctions and classes available in %s:'% __title__)
     print([i for i in dir() if not '__' in i])
-        
-'''
-Usage: /app/StereoPipeline/libexec/bundle_adjust <images> 
-                                                <cameras> 
-                                                <optional ground control points> 
-                                                -o <output prefix> 
-                                                [options]
-  -o [ --output-prefix ] arg            Prefix for output filenames.
-  --cost-function arg (=Cauchy)         Choose a cost function from: Cauchy, 
-                                        PseudoHuber, Huber, L1, L2, Trivial.
-  --robust-threshold arg (=0.5)         Set the threshold for robust cost 
-                                        functions. Increasing this makes the 
-                                        solver focus harder on the larger 
-                                        errors.
-  --inline-adjustments                  If this is set, and the input cameras 
-                                        are of the pinhole or panoramic type, 
-                                        apply the adjustments directly to the 
-                                        cameras, rather than saving them 
-                                        separately as .adjust files.
-  --approximate-pinhole-intrinsics      If it reduces computation time, 
-                                        approximate the lens distortion model.
-  --solve-intrinsics                    Optimize intrinsic camera parameters.  
-                                        Only used for pinhole cameras.
-  --intrinsics-to-float arg             If solving for intrinsics and desired 
-                                        to float only a few of them, specify 
-                                        here, in quotes, one or more of: 
-                                        focal_length, optical_center, 
-                                        other_intrinsics.
-  --intrinsics-to-share arg             If solving for intrinsics and desired 
-                                        to share only a few of them, specify 
-                                        here, in quotes, one or more of: 
-                                        focal_length, optical_center, 
-                                        other_intrinsics.
-  --intrinsics-limits arg               Specify minimum and maximum ratios for 
-                                        the intrinsic parameters. Values must 
-                                        be in min max pairs and are applied in 
-                                        the order [focal length, optical 
-                                        center, other intrinsics] until all of 
-                                        the limits are used. Check the 
-                                        documentation to dermine how many 
-                                        intrinsic parameters are used for your 
-                                        cameras.
-  --camera-positions arg                Specify a csv file path containing the 
-                                        estimated positions of the input 
-                                        cameras.  Only used with the 
-                                        inline-adjustments option.
-  --disable-pinhole-gcp-init            Don't try to initialize the positions 
-                                        of pinhole cameras based on input GCPs.
-  --transform-cameras-using-gcp         Use GCP, even those that show up in 
-                                        just an image, to transform cameras to 
-                                        ground coordinates. Need at least two 
-                                        images to have at least 3 GCP each. If 
-                                        at least three GCP each show up in at 
-                                        least two images, the transform will 
-                                        happen even without this option using a
-                                        more robust algorithm.
-  --input-adjustments-prefix arg        Prefix to read initial adjustments 
-                                        from, written by a previous invocation 
-                                        of this program.
-  --initial-transform arg               Before optimizing the cameras, apply to
-                                        them the 4x4 rotation + translation 
-                                        transform from this file. The transform
-                                        is in respect to the planet center, 
-                                        such as written by pc_align's 
-                                        source-to-reference or 
-                                        reference-to-source alignment 
-                                        transform. Set the number of iterations
-                                        to 0 to stop at this step. If 
-                                        --input-adjustments-prefix is 
-                                        specified, the transform gets applied 
-                                        after the adjustments are read.
-  --fixed-camera-indices arg            A list of indices, in quotes and 
-                                        starting from 0, with space as 
-                                        separator, corresponding to cameras to 
-                                        keep fixed during the optimization 
-                                        process.
-  --fix-gcp-xyz                         If the GCP are highly accurate, use 
-                                        this option to not float them during 
-                                        the optimization.
-  --csv-format arg                      Specify the format of input CSV files 
-                                        as a list of entries 
-                                        column_index:column_type (indices start
-                                        from 1). Examples: '1:x 2:y 3:z', 
-                                        '2:file 5:lon 6:lat 7:radius_m', '3:lat
-                                        2:lon 1:height_above_datum 5:file', 
-                                        '1:easting 2:northing 
-                                        3:height_above_datum' (need to set 
-                                        --csv-proj4). Can also use radius_km 
-                                        for column_type.
-  --csv-proj4 arg                       The PROJ.4 string to use to interpret 
-                                        the entries in input CSV files.
-  --reference-terrain arg               An externally provided trustworthy 3D 
-                                        terrain, either as a DEM or as a lidar 
-                                        file, very close (after alignment) to 
-                                        the stereo result from the given images
-                                        and cameras that can be used as a 
-                                        reference, instead of GCP, to optimize 
-                                        the intrinsics of the cameras.
-  --max-num-reference-points arg (=100000000)
-                                        Maximum number of (randomly picked) 
-                                        points from the reference terrain to 
-                                        use.
-  --disparity-list arg                  The unaligned disparity files to use 
-                                        when optimizing the intrinsics based on
-                                        a reference terrain. Specify them as a 
-                                        list in quotes separated by spaces. 
-                                        First file is for the first two images,
-                                        second is for the second and third 
-                                        images, etc. If an image pair has no 
-                                        disparity file, use 'none'.
-  --max-disp-error arg (=-1)            When using a reference terrain as an 
-                                        external control, ignore as outliers 
-                                        xyz points which projected in the left 
-                                        image and transported by disparity to 
-                                        the right image differ by the 
-                                        projection of xyz in the right image by
-                                        more than this value in pixels.
-  --reference-terrain-weight arg (=1)   How much weight to give to the cost 
-                                        function terms involving the reference 
-                                        terrain.
-  --heights-from-dem arg                If the cameras have already been 
-                                        bundle-adjusted and aligned to a known 
-                                        high-quality DEM, in the triangulated 
-                                        xyz points replace the heights with the
-                                        ones from this DEM, and fix those 
-                                        points unless --heights-from-dem-weight
-                                        is positive.
-  --heights-from-dem-weight arg (=-1)   How much weight to give to keep the 
-                                        triangulated points close to the DEM if
-                                        specified via --heights-from-dem. If 
-                                        the weight is not positive, keep the 
-                                        triangulated points fixed.
-  --heights-from-dem-robust-threshold arg (=0)
-                                        If positive, the robust threshold to 
-                                        use keep the triangulated points close 
-                                        to the DEM if specified via 
-                                        --heights-from-dem. This is applied 
-                                        after the point differences are 
-                                        multiplied by --heights-from-dem-weight
-                                        .
-  --datum arg                           Use this datum. Needed only for ground 
-                                        control points, a camera position file,
-                                        or for RPC sessions. Options: WGS_1984,
-                                        D_MOON (1,737,400 meters), D_MARS 
-                                        (3,396,190 meters), MOLA (3,396,000 
-                                        meters), NAD83, WGS72, and NAD27. Also 
-                                        accepted: Earth (=WGS_1984), Mars 
-                                        (=D_MARS), Moon (=D_MOON).
-  --semi-major-axis arg (=0)            Explicitly set the datum semi-major 
-                                        axis in meters (see above).
-  --semi-minor-axis arg (=0)            Explicitly set the datum semi-minor 
-                                        axis in meters (see above).
-  -t [ --session-type ] arg             Select the stereo session type to use 
-                                        for processing. Options: nadirpinhole 
-                                        pinhole isis dg rpc spot5 aster 
-                                        opticalbar csm. Usually the program can
-                                        select this automatically by the file 
-                                        extension.
-  --min-matches arg (=30)               Set the minimum  number of matches 
-                                        between images that will be considered.
-  --ip-detect-method arg (=0)           Interest point detection algorithm (0: 
-                                        Integral OBALoG (default), 1: OpenCV 
-                                        SIFT, 2: OpenCV ORB.
-  --epipolar-threshold arg (=-1)        Maximum distance from the epipolar line
-                                        to search for IP matches. Default: 
-                                        automatic calculation. A higher values 
-                                        will result in more matches.
-  --ip-inlier-factor arg (=0.20000000000000001)
-                                        A higher factor will result in more 
-                                        interest points, but perhaps also more 
-                                        outliers. This is used only with 
-                                        homography alignment, such as for the 
-                                        pinhole session.
-  --ip-uniqueness-threshold arg (=0.80000000000000004)
-                                        A higher threshold will result in more 
-                                        interest points, but perhaps less 
-                                        unique ones.
-  --ip-side-filter-percent arg (=-1)    Remove matched IPs this percentage from
-                                        the image left/right sides.
-  --normalize-ip-tiles                  Individually normalize tiles used for 
-                                        IP detection.
-  --num-obalog-scales arg (=-1)         How many scales to use if detecting 
-                                        interest points with OBALoG. If not 
-                                        specified, 8 will be used. More can 
-                                        help for images with high frequency 
-                                        artifacts.
-  --nodata-value arg (=nan)             Pixels with values less than or equal 
-                                        to this number are treated as no-data. 
-                                        This overrides the no-data values from 
-                                        input images.
-  --num-iterations arg (=1000)          Set the maximum number of iterations.
-  --max-iterations arg (=1000)          Set the maximum number of iterations.
-  --parameter-tolerance arg (=1e-08)    Stop when the relative error in the 
-                                        variables being optimized is less than 
-                                        this.
-  --overlap-limit arg (=0)              Limit the number of subsequent images 
-                                        to search for matches to the current 
-                                        image to this value.  By default match 
-                                        all images.
-  --overlap-list arg                    A file containing a list of image 
-                                        pairs, one pair per line, separated by 
-                                        a space, which are expected to overlap.
-                                        Matches are then computed only among 
-                                        the images in each pair.
-  --auto-overlap-buffer arg (=-1)       Try to automatically guess which images
-                                        overlap with the provided buffer in 
-                                        lonlat degrees.
-  --position-filter-dist arg (=-1)      Set a distance in meters and don't 
-                                        perform IP matching on images with an 
-                                        estimated camera center farther apart 
-                                        than this distance.  Requires 
-                                        --camera-positions.
-  --rotation-weight arg (=0)            A higher weight will penalize more 
-                                        rotation deviations from the original 
-                                        configuration.
-  --translation-weight arg (=0)         A higher weight will penalize more 
-                                        translation deviations from the 
-                                        original configuration.
-  --camera-weight arg (=1)              The weight to give to the constraint 
-                                        that the camera positions/orientations 
-                                        stay close to the original values (only
-                                        for the Ceres solver).  A higher weight
-                                        means that the values will change less.
-                                        The options --rotation-weight and 
-                                        --translation-weight can be used for 
-                                        finer-grained control and a stronger 
-                                        response.
-  --overlap-exponent arg (=0)           If a feature is seen in n >= 2 images, 
-                                        give it a weight proportional with 
-                                        (n-1)^exponent.
-  --ip-per-tile arg (=0)                How many interest points to detect in 
-                                        each 1024^2 image tile (default: 
-                                        automatic determination).
-  --num-passes arg (=2)                 How many passes of bundle adjustment to
-                                        do. If more than one, outliers will be 
-                                        removed between passes using 
-                                        --remove-outliers-params and 
-                                        --remove-outliers-by-disparity-params, 
-                                        and re-optimization will take place. 
-                                        Residual files and a copy of the match 
-                                        files with the outliers removed will be
-                                        written to disk.
-  --num-random-passes arg (=0)          After performing the normal bundle 
-                                        adjustment passes, do this many more 
-                                        passes using the same matches but 
-                                        adding random offsets to the initial 
-                                        parameter values with the goal of 
-                                        avoiding local minima that the 
-                                        optimizer may be getting stuck in.
-  --remove-outliers-params arg (='pct factor err1 err2')
-                                        Outlier removal based on percentage, 
-                                        when more than one bundle adjustment 
-                                        pass is used. Triangulated points (that
-                                        are not GCP) with reprojection error in
-                                        pixels larger than min(max('pct'-th 
-                                        percentile * 'factor', err1), err2) 
-                                        will be removed as outliers. Hence, 
-                                        never remove errors smaller than err1 
-                                        but always remove those bigger than 
-                                        err2. Specify as a list in quotes. 
-                                        Default: '75.0 3.0 2.0 3.0'.
-  --remove-outliers-by-disparity-params arg (=pct factor)
-                                        Outlier removal based on the disparity 
-                                        of interest points (difference between 
-                                        right and left pixel), when more than 
-                                        one bundle adjustment pass is used. For
-                                        example, the 10% and 90% percentiles of
-                                        disparity are computed, and this 
-                                        interval is made three times bigger. 
-                                        Interest points (that are not GCP) 
-                                        whose disparity falls outside the 
-                                        expanded interval are removed as 
-                                        outliers. Instead of the default 90 and
-                                        3 one can specify pct and factor, 
-                                        without quotes.
-  --elevation-limit arg (=auto)         Remove as outliers interest points 
-                                        (that are not GCP) for which the 
-                                        elevation of the triangulated position 
-                                        (after cameras are optimized) is 
-                                        outside of this range. Specify as two 
-                                        values: min max.
-  --lon-lat-limit arg (=auto)           Remove as outliers interest points 
-                                        (that are not GCP) for which the 
-                                        longitude and latitude of the 
-                                        triangulated position (after cameras 
-                                        are optimized) are outside of this 
-                                        range. Specify as: min_lon min_lat 
-                                        max_lon max_lat.
-  --enable-rough-homography             Enable the step of performing 
-                                        datum-based rough homography for 
-                                        interest point matching. This is best 
-                                        used with reasonably reliable input 
-                                        cameras and a wide footprint on the 
-                                        ground.
-  --skip-rough-homography               Skip the step of performing datum-based
-                                        rough homography. This obsolete option 
-                                        is ignored as is the default.
-  --enable-tri-ip-filter                Enable triangulation-based interest 
-                                        points filtering. This is best used 
-                                        with reasonably reliable input cameras.
-  --disable-tri-ip-filter               Disable triangulation-based interest 
-                                        points filtering. This obsolete option 
-                                        is ignored as is the default.
-  --no-datum                            Do not assume a reliable datum exists, 
-                                        such as for irregularly shaped bodies.
-  --individually-normalize              Individually normalize the input images
-                                        instead of using common values.
-  --ip-triangulation-max-error arg (=-1)
-                                        When matching IP, filter out any pairs 
-                                        with a triangulation error higher than 
-                                        this.
-  --ip-num-ransac-iterations arg (=1000)
-                                        How many RANSAC iterations to do in 
-                                        interest point matching.
-  --min-triangulation-angle arg (=0.10000000000000001)
-                                        The minimum angle, in degrees, at which
-                                        rays must meet at a triangulated point 
-                                        to accept this point as valid.
-  --forced-triangulation-distance arg (=-1)
-                                        When triangulation fails, for example, 
-                                        when input cameras are inaccurate, 
-                                        artificially create a triangulation 
-                                        point this far ahead of the camera, in 
-                                        units of meter.
-  --use-lon-lat-height-gcp-error        When having GCP, interpret the three 
-                                        standard deviations in the GCP file as 
-                                        applying not to x, y, and z, but rather
-                                        to latitude, longitude, and height.
-  --force-reuse-match-files             Force reusing the match files even if 
-                                        older than the images or cameras.
-  --mapprojected-data arg               Given map-projected versions of the 
-                                        input images, the DEM they were 
-                                        mapprojected onto, and IP matches among
-                                        the mapprojected images, create IP 
-                                        matches among the un-projected images 
-                                        before doing bundle adjustment. Specify
-                                        the mapprojected images and the DEM as 
-                                        a string in quotes, separated by 
-                                        spaces. An example is in the 
-                                        documentation.
-  --save-cnet-as-csv                    Save the control network containing all
-                                        interest points in the format used by 
-                                        ground control points, so it can be 
-                                        inspected.
-  --gcp-from-mapprojected-images arg    Given map-projected versions of the 
-                                        input images, the DEM the were 
-                                        mapprojected onto, and interest point 
-                                        matches among all of these created in 
-                                        stereo_gui, create GCP for the input 
-                                        images to align them better to the DEM.
-                                        This is experimental and not 
-                                        documented.
-  --instance-count arg (=1)             The number of bundle_adjustment 
-                                        processes being run in parallel.
-  --instance-index arg (=0)             The index of this parallel bundle 
-                                        adjustment process.
-  --stop-after-statistics               Quit after computing image statistics.
-  --stop-after-matching                 Quit after writing all match files.
-  --skip-matching                       Only use image matches which can be 
-                                        loaded from disk.
-  --ip-debug-images [=arg(=1)] (=0)     Write debug images to disk when 
-                                        detecting and matching interest points.
-  -r [ --report-level ] arg (=10)       Use a value >= 20 to get increasingly 
-                                        more verbose output.
-
-  --threads arg (=0)                    Select the number of processors 
-                                        (threads) to use.
-  --tile-size arg (=256, 256)           Image tile size used for multi-threaded
-                                        processing.
-  --no-bigtiff                          Tell GDAL to not create bigtiffs.
-  --tif-compress arg (=LZW)             TIFF Compression method. [None, LZW, 
-                                        Deflate, Packbits]
-  -v [ --version ]                      Display the version of software.
-  -h [ --help ]                         Display this help message.
-
-'''
-
-
-
+ 

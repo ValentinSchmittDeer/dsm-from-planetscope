@@ -31,6 +31,7 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard arguments
 #-----------------------------------------------------------------------
+np.set_printoptions(suppress=True)
 colLen=(5, 20)
 #-----------------------------------------------------------------------
 # Hard command
@@ -65,10 +66,15 @@ class ReadBA:
         return strOut
     
     def AddCam(self, pathDir):
+        if not '_ProcData' in os.path.basename(pathDir):
+            formTsai=self.strTsai
+        else:
+            formTsai='{}_2Adj.tsai'
         # Read camera
-        grepTsai=os.path.join(pathDir, self.strTsai.format('*'))
+        grepTsai=os.path.join(pathDir, formTsai.format('*'))
         for pathCur in glob(grepTsai):
             name=os.path.basename(pathCur).split('.')[0].strip(self.prefix)
+            print(name)
             if not name in self.dicTsai: continue 
             
             self.dicTsai[name].append(GeomFunc.TSAIin(pathCur))
@@ -146,8 +152,8 @@ def TableDiff(dicTsai, nbBa, argsCur):
     print('='*(colLen[0]+10)+'{:^26}'.format('Differences Table')+'='*(13+colLen[1]*nbBa+3*(nbBa-1)))
     Table_Line('ImgID','Name', ['Init']+lstBaName)
     lstKind=['3DCentre[m]', 'Angles[°]']
-    if argsCur.eo: lstKind+=['X[m]', 'Y[m]', 'Z[m]']
-    if argsCur.io: lstKind+=['Focal[mm]', '2DPP[mm]', 'K1[pxl_n]', 'K2[pxl_n]', 'P1[pxl_n]', 'P2[pxl_n]']
+    if argsCur.eo: lstKind+=['Long[°]', 'Lat[°]', 'Height[m]']
+    if argsCur.io: lstKind+=['Focal[mm]', '2DPP[pxl]'] #, 'K1[pxl_n]', 'K2[pxl_n]', 'P1[pxl_n]', 'P2[pxl_n]'
     for kind in lstKind:
         print(kind+': '+'-'*(colLen[0]+colLen[1]*(2+nbBa)+9+3*(nbBa-1)-2-len(kind)))
 
@@ -155,7 +161,7 @@ def TableDiff(dicTsai, nbBa, argsCur):
         for i, sceneId in enumerate(sorted(dicTsai)):                    
             lstCur=dicTsai[sceneId]
             if not len(lstCur)==1+nbBa: continue
-
+            
             if kind=='3DCentre[m]':
                 mat[i,:]=[np.round(norm(obj.vectX0-lstCur[0].vectX0), 3)
                                 for obj in lstCur]
@@ -163,20 +169,26 @@ def TableDiff(dicTsai, nbBa, argsCur):
                 lstVect=[obj.matR@np.array([[0],[0],[1]]) for obj in lstCur]
                 lstCos=[round(1-abs(1-(np.vdot(vect,lstVect[0]))), 7) for vect in lstVect]
                 mat[i,:]=[round(acos(valCos)*180/pi, 4) for valCos in lstCos]
-            elif kind=='X[m]':
-                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[0,0], 3)
-                                for obj in lstCur]
-            elif kind=='Y[m]':
-                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[1,0], 3)
-                                for obj in lstCur]
-            elif kind=='Z[m]':
-                mat[i,:]=[np.round((obj.vectX0-lstCur[0].vectX0)[2,0], 3)
-                                for obj in lstCur]
+            elif kind=='Long[°]':
+                matPtsCart=np.array([obj.C for obj in lstCur])
+                matPtsGeo=GeomFunc.Cart2Geo_Elli(matPtsCart)
+                mat[i,:]=[np.round(matPtsGeo[i,0]-matPtsGeo[0,0], 6)
+                                for i in range(matPtsGeo.shape[0])]
+            elif kind=='Lat[°]':
+                matPtsCart=np.array([obj.C for obj in lstCur])
+                matPtsGeo=GeomFunc.Cart2Geo_Elli(matPtsCart)
+                mat[i,:]=[np.round(matPtsGeo[i,1]-matPtsGeo[0,1], 6)
+                                for i in range(matPtsGeo.shape[0])]
+            elif kind=='Height[m]':
+                matPtsCart=np.array([obj.C for obj in lstCur])
+                matPtsGeo=GeomFunc.Cart2Geo_Elli(matPtsCart)
+                mat[i,:]=[np.round(matPtsGeo[i,2]-matPtsGeo[0,2], 3)
+                                for i in range(matPtsGeo.shape[0])]
             elif kind=='Focal[mm]':
                 mat[i,:]=[round(obj.fu-lstCur[0].fu, 6) 
                                 for obj in lstCur]
-            elif kind=='2DPP[mm]':
-                mat[i,:]=[np.round(norm(obj.vectPP-lstCur[0].vectPP), 6)
+            elif kind=='2DPP[pxl]':
+                mat[i,:]=[np.round(norm(obj.vectPP/obj.pitch-lstCur[0].vectPP/lstCur[0].pitch), 6)
                                 for obj in lstCur]
             elif kind=='K1[pxl_n]':
                 mat[i,:]=[np.round(obj.k1-lstCur[0].k1, 6)
@@ -192,7 +204,7 @@ def TableDiff(dicTsai, nbBa, argsCur):
                                 for obj in lstCur]
 
 
-            if argsCur.longTable: Table_Line(i, 'Diff '+kind, list(mat[i,:]))
+            if argsCur.longTable: Table_Line(i, 'Diff '+kind, mat[i,:].tolist())
         
         if argsCur.longTable: Table_Line('.'*colLen[0], '.'*colLen[1], ['.'*colLen[1]]*(mat.shape[1]))
         Table_Sum(mat, 'Diff '+kind)
@@ -219,7 +231,7 @@ def TableRes(dicTsai, nbBa, argsCur):
             elif kind=='KeyPoints[pxl]':
                 mat[i,:]=[0]+[round(obj.resiKPfinal, 1) for obj in lstCur[1:]]
             
-            if argsCur.longTable: Table_Line(i,'Resid '+kind, list(mat[i,:]))
+            if argsCur.longTable: Table_Line(i,'Resid '+kind, mat[i,:].tolist())
         
         if argsCur.longTable: Table_Line('.'*colLen[0], '.'*colLen[1], ['.'*colLen[1]]*(mat.shape[1]))
         Table_Sum(mat, 'Res '+kind)
@@ -228,20 +240,22 @@ def TableRes(dicTsai, nbBa, argsCur):
 def Table_Line(iCur, kindCur, lstVal, lenCur=colLen):
     strOut= str(iCur).ljust(lenCur[0])+' | '
     strOut+=kindCur.ljust(lenCur[1])+' | '
-    strOut+=' | '.join([str(word).ljust(lenCur[1]) for word in lstVal])
+    if type(lstVal[0])==float: 
+        if '[°]' in kindCur:
+            lstVal=['{:.6f}'.format(val) for val in lstVal]
+        elif '[pxl]' in kindCur:
+            lstVal=['{:.2f}'.format(val) for val in lstVal]
+        else:
+            lstVal=['{:.3f}'.format(val) for val in lstVal]
+    strOut+=' | '.join([word.ljust(lenCur[1]) for word in lstVal])
     print(strOut)
 
 def Table_Sum(matIn, kindCur, lenCur=colLen):
-    ave=np.round(np.nanmean(matIn, axis=0), 3)
-    Table_Line('Mean', kindCur, ave)
-    rms=np.round(np.sqrt(np.nanmean(np.square(matIn), axis=0)), 3)
-    Table_Line('RMS', kindCur, rms)
-    std=np.round(np.nanstd(matIn, axis=0), 3)
-    Table_Line('Std', kindCur, std)
-    maxCur=np.round(np.nanmax(matIn, axis=0), 3)
-    Table_Line('Max', kindCur, maxCur)
-    minCur=np.round(np.nanmin(matIn, axis=0), 3)
-    Table_Line('Min', kindCur, minCur)
+    Table_Line('Mean', kindCur, np.round(np.nanmean(matIn, axis=0), 3).tolist())
+    Table_Line('RMS', kindCur, np.round(np.sqrt(np.nanmean(np.square(matIn), axis=0)), 3).tolist())
+    Table_Line('Std', kindCur, np.round(np.nanstd(matIn, axis=0), 3).tolist())
+    Table_Line('Max', kindCur, np.round(np.nanmax(matIn, axis=0), 3).tolist())
+    Table_Line('Min', kindCur, np.round(np.nanmin(matIn, axis=0), 3).tolist())
 
 def GraphEO(dicTsai, argsCur):
     '''
