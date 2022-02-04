@@ -40,7 +40,7 @@ def ExtractMD_Blocks(pathIn, lstMD, lstBName=False):
     out:
         objBlock (obj): updated object
     '''
-    objInfo=SceneBlocks([], pathIn, 'info')
+    objInfo=SceneBlocks(pathIn)
     if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
 
     if lstBName:
@@ -51,7 +51,7 @@ def ExtractMD_Blocks(pathIn, lstMD, lstBName=False):
     for bI in lstBId:
         nameB, nbFeat=objInfo.lstBId[bI]
         SubLogger('INFO', nameB)
-        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+        objCur=SceneBlocks(pathIn, meth='dir', b=nameB)
 
         ptsGeo=np.zeros([nbFeat,3])
 

@@ -36,7 +36,7 @@ def FilterBlocks(pathIn, fType, lstBName=False, aoi=None, red=None):
     out:
         objBlock (class): filetered object, new lstBName and lstBFeat
     '''
-    objInfo=SceneBlocks([], pathIn, 'info')
+    objInfo=SceneBlocks(pathIn)
     if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
     if not fType in methodF: SubLogger('CRITICAL', 'Unknown filtering method: %s'% fType)
 
@@ -48,7 +48,7 @@ def FilterBlocks(pathIn, fType, lstBName=False, aoi=None, red=None):
     for bI in lstBId:
         nameB, nbFeat=objInfo.lstBId[bI]
         SubLogger('INFO', nameB)
-        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+        objCur=SceneBlocks(pathIn, meth='dir', b=nameB)
 
         if fType=='fp': 
             Filter_Footprint(objCur.lstBFeat[0])

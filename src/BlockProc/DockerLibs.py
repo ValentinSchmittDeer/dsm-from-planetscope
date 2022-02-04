@@ -340,7 +340,7 @@ class GdalPython():
             SubLogger('CRITICAL', 'All arguments must be string type')
         
         lstAbsPath=[arg.strip('"').split('=')[-1].startswith(self.rootFolder) for arg in subArgs if '/' in arg]
-        if False in lstAbsPath and not 'assign.value' in subArgs[lstAbsPath.index(False)]: 
+        if False in lstAbsPath and not 'calc' in [arg for arg in subArgs if '/' in arg][lstAbsPath.index(False)]: 
             pprint(subArgs)
             SubLogger('CRITICAL', 'All paths must be absolute: %s'% str(lstAbsPath))
         return 0
@@ -381,7 +381,7 @@ class GdalPython():
             SubLogger('CRITICAL', 'That command returned 0 but the process failed: key={!r}'.format(checkCmd))
 
         if checkInfo and not out.returncode:
-            return json.loads(out.stdout.decode("utf-8"))
+            return [lineCur.strip() for lineCur in out.stdout.decode("utf-8").split('\n')]
         else:
             return out.returncode
 
@@ -396,6 +396,9 @@ class GdalPython():
 
     def gdal_calc(self, subArgs):
         return self._RunCmd('gdal_calc.py', subArgs)
+
+    def gdal_retile(self, subArgs):
+        return self._RunCmd('gdal_retile.py', subArgs)
 
 
 #=======================================================================

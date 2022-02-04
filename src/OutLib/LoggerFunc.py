@@ -211,7 +211,7 @@ class ProcessStdout:
                                    tLeft//3600,tLeft%3600//60,tLeft%60,
                                    tTotal//3600,tTotal%3600//60,tTotal%60,
                                    )
-        print (strOut, end=''+'\n'*int(ratio==1))
+        print (strOut, end=''+'\n'*floor(ratio))
         sys.stdout.flush()
     
     def ViewList(self,i):

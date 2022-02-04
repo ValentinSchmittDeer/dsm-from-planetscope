@@ -68,7 +68,7 @@ def Main(args):
         # Read Repo
         #---------------------------------------------------------------
         logger.info('# Read Repo')
-        objInfo=SceneBlocks([], args.i, 'info')
+        objInfo=SceneBlocks(args.i)
         if not objInfo.nbB: raise RuntimeError('No block available')
 
         #---------------------------------------------------------------
@@ -83,7 +83,7 @@ def Main(args):
         for iB in lstBId:
             nameB, nbFeat=objInfo.lstBId[iB]
             logger.info(nameB)
-            objCur=SceneBlocks([], args.i, 'dir', b=nameB)
+            objCur=SceneBlocks(args.i, meth='dir', b=nameB)
 
             newBucket=PCTBucket(args.n, nameB, args.l, objCur.lstBFeat[0], args.i)
             

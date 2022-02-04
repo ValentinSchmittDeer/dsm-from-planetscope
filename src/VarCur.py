@@ -49,7 +49,9 @@ __all__ =[# SSBP
           #'camDistBa',
           #'camDistExp',
           #'factConstSat',
-          'nameGeoid',
+          'tolPairArea',
+          'tolAxisAngle',
+          'tolDispDiff',
           'gsdOrth',
           ## MSS
           'gsdDsm',
@@ -107,8 +109,8 @@ fileCov='{}_Coverage.tif'
 fileBHfTrack='{}_BHfTrack.geojson'
 
 # Orbits
-satAz_Val=(-180, -110, -83, 85, 100, 277, 180)
-satAz_Name=('descending', 'ascending', 'descending', 'ascending', 'descending', 'descending', 'descending')
+satAz_Val=(-180, -110, -83, 85, 100, 110, 277, 180)
+satAz_Name=('descending', 'ascending', 'descending', 'ascending', 'descending', 'descending', 'descending', 'descending')
 satAz_Tol=10
 
 ## PCT
@@ -166,12 +168,12 @@ class PathCur:
 
         # Files
         #   ASfM
-        #self.pDem=pathDem
         self.pDemGrad=os.path.join(self.pB, 'DEM_Gradient_DoG.tif')
         self.pStereoLst=os.path.join(self.pB, '{}_Stereo.txt'.format(bId))
         #self.pOrbit=os.path.join(self.pB,'%s_InitialCam.kml'% bId)
         self.pOrtho=os.path.join(self.pB, 'ASP_Ortho{1}', '{0}_Ortho{1}.tif')
         #   MSS
+        self.pStereoDM=os.path.join(self.pB, '{}_StereoDM.geojson'.format(bId))
         self.pJsonSource=os.path.join(self.pPdalDir, 'Pdal_SourceID.json')
         self.pJsonRast_WA=os.path.join(self.pPdalDir, 'Pdal_Rasterize-WeightedAve.json')
         self.pJsonFilter=os.path.join(self.pPdalDir, 'Pdal_Filter.json')
@@ -180,7 +182,6 @@ class PathCur:
         self.pPcFltTile=os.path.join(self.pPcFltDir, 'PC-Filtered-Tile_{}.las')
         self.pDsmTile=os.path.join(self.pDsmDir, 'DSM-Tile_{}.tif')
         self.pDsmFinal=os.path.join(self.pDsmDir, 'DSM-Final.tif')
-        #self.pPcMerge=os.path.join(self.pPcFullDir, 'PC_Merge.las')
 
         # Extention
         #   ASfM
@@ -194,9 +195,7 @@ class PathCur:
         self.extRpcKP='{}_RPC.TXT'.format(self.extFeatKP[:-4])
         self.nTsai=('{}_0Rough.tsai', 
                     '{}_1Init.tsai',
-                    '{}_2Adj.tsai',
-                    '{}_3Epi.tsai',
-                    )
+                    '{}_2Adj.tsai')
         #   MSS
         self.extPC='-PC_{}.las'
 
@@ -227,8 +226,9 @@ camPitch=5.5e-3
 #camDistExp='BrownConradyDistortion'
 #factConstSat=1e-9
 
-nameGeoid='Geoid_fromDiff.tif'
-
+tolPairArea=1e-4
+tolAxisAngle=80
+tolDispDiff=1
 gsdOrth=4
 
 ## MSS

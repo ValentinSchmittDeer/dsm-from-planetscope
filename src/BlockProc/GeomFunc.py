@@ -1062,6 +1062,11 @@ def MaskedImg(pathImgIn, pathModelIn, pathDemIn, geomIn, pathImgOut=None, buffer
     '''
     # Input
     if not os.path.exists(pathDemIn): SubLogger('CRITICAL', 'DEM not found: %s'% pathDemIn)
+    try:
+        matCoordsGeo=np.array(geomIn['coordinates']).reshape(-1,2)
+        nbPts, dimCur=matCoordsGeo.shape
+    except ValueError:
+        SubLogger('CRITICAL', "Input point must json['geometry'] with 2 components coordinates")
 
     if type(pathImgIn)==np.ndarray:
         img = pathImgIn
@@ -1083,15 +1088,11 @@ def MaskedImg(pathImgIn, pathModelIn, pathDemIn, geomIn, pathImgOut=None, buffer
     if pathImgOut and os.path.exists(pathImgOut): os.remove(pathImgOut)
 
     # Read DTM
-    demIn=rasterio.open(pathDemIn)
-    demHei=demIn.read(1)
-    matCoordsGeo=np.zeros([len(geomIn['coordinates'][0]), 3])
-    for i, coordCur in enumerate(geomIn['coordinates'][0]):
-        matCoordsGeo[i,:2]=coordCur
-        matCoordsGeo[i,-1]=demHei[demIn.index(coordCur[0], coordCur[1])]
-
-    del demHei
-    demIn.close()
+    with rasterio.open(pathDemIn) as demIn:
+        tupIndices=rasterio.transform.rowcol(demIn.transform, matCoordsGeo[:,0].tolist(), matCoordsGeo[:,1].tolist())
+        demHei=demIn.read(1)
+        matCoordsGeo=np.append(matCoordsGeo, demHei[tupIndices][:, np.newaxis], axis=1)
+        del demHei
     
     # Convert to image coords
     if type(objModel)==TSAIin:

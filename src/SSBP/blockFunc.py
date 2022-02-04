@@ -26,7 +26,7 @@ from pprint import pprint
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__=['SceneBlocks', 'Date2Int', 'DisplayFootprint', 'RatioBH', 'Coverage', 'StereoCoupling', 'SatGeo2Cart']
+__all__=['SceneBlocks', 'Date2Int', 'RatioBH', 'Coverage', 'StereoCoupling']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
@@ -35,10 +35,16 @@ SetupLogger(name=__name__)
 
 class SceneBlocks():
     '''
-    Block creation object using the list of feature. One object SceneBlocks holds 
-    all blocks information
+    1st mode:
+    Block creation object using the list of feature. It gathers all scenes 
+    with 'one' method or gathers scene from the month with 'month' method.
+    2nd mode:
+    Read directory and load all descriptors files into the object. The 'info'
+    method provide a light version loading just a few information and 
+    the 'dir' method loads all of them. The 'dir' method can select block 
+    to load from their name.
     
-    lstIn (list): list of feature with custumer metatdata (json obj)
+    lstIn (list): list of feature (json) with custumer metatdata (default: None)
     pathOut (str): output directory
     meth (str): block creation method
         'one': one block from input features
@@ -57,14 +63,14 @@ class SceneBlocks():
             lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
     '''
 
-    def __init__(self, lstIn, pathOut, meth, b=None):
+    def __init__(self, pathCur, lstIn=None, meth='info', b=None):
         '''
         Main block creation function leading to Build_xx functions
         '''
         self.nbFeat=len(lstIn)
         self.method=meth
-        if not os.path.isdir(pathOut): SubLogger('CRITICAL', 'pathOut must be a directory')
-        self.dirOut=pathOut
+        if not os.path.isdir(pathCur): SubLogger('CRITICAL', 'pathCur must be a directory')
+        self.dirOut=pathCur
 
         if meth=='one':
             self.Build_One(lstIn)
@@ -78,7 +84,7 @@ class SceneBlocks():
             SubLogger('CRITICAL', 'Unknown block method (%s)'% meth)
 
     def __str__(self):
-        return '\n\t\t'.join(['Block List:', '(Block ID, Feature number)']+[str(tu) for tu in self.lstBId])
+        return '\n\t\t'.join(['Block List (%s):'% self.method, '(Block ID, Feature number)']+[str(tu) for tu in self.lstBId])
 
     def Build_One(self, lstIn):
         '''
@@ -313,21 +319,6 @@ class SceneBlocks():
 def Date2Int(datetimeObj):
     return int('{}{:02d}'.format(datetimeObj.year, datetimeObj.month))
 
-def DisplayFootprint(geom1,geom2,centre):
-    import matplotlib.pyplot as plt
-    fig, graph = plt.subplots(1, 1)
-    
-    graph.plot(geom1[:,0],geom1[:,1],'kx-',label='Footprint init')
-    graph.plot(geom2[:,0],geom2[:,1],'go-',label='Footprint DP')
-    graph.plot(centre[0],centre[1],'r^',label='Centre')
-    
-    graph.set_xlabel('Long')
-    graph.set_ylabel('Lat')
-    graph.legend()
-    
-    fig.suptitle('Footprint')
-    plt.show()
-
 def RatioBH(descrip1, descrip2):
     '''
     Compute B/H ratio based on lat, long and altitude of 2 images.
@@ -352,15 +343,14 @@ def RatioBH(descrip1, descrip2):
 
 def Coverage(pathIn,  featAoi, lstBName=False):
     '''
-    Compute the number of scene per ground sample and 
-    stereopair (if available). It is written down laster 
-    by the WriteBlocks function.
-
+    Compute the number of scene per ground sample. It writes straight 
+    the image file.
+    
+    pathIn (str): working directory with block folders
     featAoi (json): orignal AOI feature used as mask
     lstBName (list): list of block name (default: False means all)
     out:
-        objBlock (class): updated object
-            lstCoverage (list): list of tuple (image profile, scene coverage frame, stereo pair coverage frame)
+        0 (int): the coverage image has been written at the block root
     '''
     def Geometry_Stack(shapeCur, transfCur, featIn):
         '''
@@ -394,7 +384,7 @@ def Coverage(pathIn,  featAoi, lstBName=False):
             
         return frameOut
 
-    objInfo=SceneBlocks([], pathIn, 'info')
+    objInfo=SceneBlocks(pathIn)
     if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
 
     if lstBName:
@@ -405,7 +395,7 @@ def Coverage(pathIn,  featAoi, lstBName=False):
     for bI in lstBId:
         nameB, nbFeat=objInfo.lstBId[bI]
         SubLogger('INFO', nameB)
-        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+        objCur=SceneBlocks(pathIn, meth='dir', b=nameB)
           
         geomAoiJson=featAoi['features'][0]['geometry']
         geomAoi=Polygon(geomAoiJson['coordinates'][0][0])
@@ -442,19 +432,23 @@ def Coverage(pathIn,  featAoi, lstBName=False):
 
         del frameGeomStack, frameMask, objCur
 
+    return 0
+
 def StereoCoupling(pathIn, lstBName=False, moreComb=False):
     '''
-    Create list of stereo scene pairs, triplet, etc
+    Combine scenes from vector footprint and write straight 
+    the desciptor. It can go beyond stereo pairs but the computation 
+    effort may large in case of many images.
     
+    pathIn (str): working directory with block folders
     lstBName (lst): list of block name (default: False means all)
     moreComb (bool): compute triplets and higher scene combinaisons (default: False) 
     out:
-        objBlock (class): updated object
-            lstBCouple (list): list of json stereo pairs
+        0 (int): the stereo combination has been written at the block root
     '''
     from copy import deepcopy
     lstKeysBH=('ecefX_m', 'ecefY_m', 'ecefZ_m', 'sat:alt_km')
-    objInfo=SceneBlocks([], pathIn, 'info')
+    objInfo=SceneBlocks(pathIn)
     if not objInfo.nbB: SubLogger('CRITICAL', 'No existing block')
 
     if lstBName:
@@ -465,7 +459,7 @@ def StereoCoupling(pathIn, lstBName=False, moreComb=False):
     for bI in lstBId:
         nameB, nbFeat=objInfo.lstBId[bI]
         SubLogger('INFO', nameB)
-        objCur=SceneBlocks([], pathIn, 'dir', b=nameB)
+        objCur=SceneBlocks(pathIn, meth='dir', b=nameB)
 
         # Geometry check
         try:

@@ -2,20 +2,17 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
-from datetime import datetime
 from glob import glob
-from pprint import pprint
 import json
 import rasterio
-from multiprocessing import Pool
+from pprint import pprint
 
 
 # dsm_from_planetscope libraries
 from OutLib.LoggerFunc import *
 from VarCur import *
 from SSBP.blockFunc import SceneBlocks 
-from BlockProc import DockerLibs, ASfMFunc, GeomFunc
-from PCT import pipelDFunc
+from BlockProc import DockerLibs, ASfMFunc
 
 #-------------------------------------------------------------------
 # Usage
@@ -26,9 +23,34 @@ __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
     Main Task
+Run bundle adjustment tasks of existing blocks. The creation of initial 
+and final orthophoto allows the user to controle the block adjustment.
+Moreover, ortho can be requested at every adjustment steps: -ortho.
+The standard mode (PM: physical model) allows extrainsic and intrinsic 
+refinements. The second one can be skiped with -io argument A RPC 
+adjustment is written but it only adjusts extrinsic parameters and store 
+the new RPC. That method is not recommended during dense matching projects.
+A "resume" option in hard coded and allows new runs to restart from 
+the last stop. File has to be deleted to avoid it.
 
 **************************************************************************
-> Steps
+> Read existing blocks
+> Create single band images (green band)
+> Create initial orthophotos from RPC
+> Extract tie points (key points)
+> Run fixed adjustment fixing multi-obs points and input DEM height to them
+PM mode:
+> Transform RPCs to PMs
+> Adjust extrinsic parameters with GCP from RPC key points
+> Adjust intrinsic parameters with larger weight on extrinsics
+> Export camera models
+> Create final orthophoto
+RPC mode:
+> Adjust RPCs with GCP from RPC key points
+> Create adjusted RPCs
+> Export camera models
+> Create final orthophoto
+
 **************************************************************************
 '''% (__title__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -36,7 +58,6 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 # Hard arguments
 #-----------------------------------------------------------------------
 global procBar
-gdInfo='gdalinfo'
 
 #-----------------------------------------------------------------------
 # Hard command
@@ -106,7 +127,7 @@ if __name__ == "__main__":
         #---------------------------------------------------------------
         logger.info('# Read Repo')
         logger.info(geomAoi['properties']['NAME'])
-        objInfo=SceneBlocks([], args.i, 'info')
+        objInfo=SceneBlocks(args.i)
         if not objInfo.nbB: raise RuntimeError('No block available')
         
         #---------------------------------------------------------------
@@ -125,9 +146,11 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             nameB, nbFeat=objInfo.lstBId[iB]
             logger.info('%s (%i scenes)'% objInfo.lstBId[iB])
-            objBlocks=SceneBlocks([], args.i, 'dir', b=nameB)
+            objBlocks=SceneBlocks(args.i, meth='dir', b=nameB)
             objPath=PathCur(args.i, nameB, geomAoi['properties']['NAME'])
             
+
+
             if iProc <= lstProcLvl.index('read'): continue
 
             #---------------------------------------------------------------
@@ -202,9 +225,9 @@ if __name__ == "__main__":
                             if objBlocks.lstBCouple[0][j]['properties']['nbScene']==2]
 
                 procBar=ProcessStdout(name='Feature extraction',inputCur=len(lstIPair))
-                logger.error('No KP extraction')
-                for i in ():
-                #for j in lstIPair:
+                #logger.error('No KP extraction')
+                #for i in ():
+                for j in lstIPair:
                     procBar.ViewBar(j)
                     strId=objBlocks.lstBCouple[0][j]['properties']['scenes']
                     lstId=sorted(strId.split(';'))
@@ -212,6 +235,7 @@ if __name__ == "__main__":
                     basenameMatch='__'.join([objPath.extFeat1B.format(idCur).split('.')[0] for idCur in lstId])
                     pathMatch=objPath.prefKP+'-'+basenameMatch+'.match'
                     if os.path.exists(pathMatch): continue
+                    if os.path.exists(pathMatch+'null'): continue
                     
                     lstPath, outMask=[], 0
 
@@ -220,13 +244,11 @@ if __name__ == "__main__":
                         pathImgOut=os.path.join(objPath.pProcData, objPath.extFeatKP.format(idCur))
                         pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idCur))
                         pathRpcOut=os.path.join(objPath.pProcData, objPath.extRpcKP.format(idCur))
-                        out=GeomFunc.MaskedImg( pathImgIn, 
+                        out=ASfMFunc.MaskedImg_KP( pathImgIn, 
                                                     pathRpcIn, 
                                                     args.dem, 
                                                     objBlocks.lstBCouple[0][j]['geometry'],
-                                                    pathImgOut=pathImgOut,
-                                                    buffer=10,
-                                                    )
+                                                    pathImgOut=pathImgOut)
                         if not type(out)==bool: outMask+=out
 
                         # RPC copy
@@ -235,30 +257,30 @@ if __name__ == "__main__":
 
                         lstPath.append((pathImgOut, pathRpcOut))
 
-                    softLvl=-1
                     # KP grid
-                    while ASfMFunc.CopyPrevBA(objPath.prefStereoKP, objPath.prefKP, kp='disp', dispExists=True, dirExists=False, img=False) and softLvl<3 and not outMask:
+                    softLvl=-1
+                    while not outMask and ASfMFunc.CopyPrevBA(objPath.prefStereoKP, objPath.prefKP, kp='disp', dispExists=True, dirExists=False, img=False) and softLvl<3:
                         softLvl+=1
                         asp.parallel_stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath.prefStereoKP, lstPath, softness=softLvl))
                     
-                    if softLvl==3 and not os.path.exists(pathMatch): softLvl=-1
-                    
-                    softLvl=-1
                     # KP sparse + check (with '--stop-point', '2')
-                    while ASfMFunc.CopyPrevBA(objPath.prefStereoKP, objPath.prefKP, kp='match', dispExists=True, dirExists=False, img=False) and softLvl<1 and not outMask:
-                        softLvl+=1
-                        asp.parallel_stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath.prefStereoKP, lstPath, softness=softLvl)+['--stop-point', '2'])
+                    if softLvl==3 and not os.path.exists(pathMatch): 
+                        softLvl=-1
+                        while not outMask and ASfMFunc.CopyPrevBA(objPath.prefStereoKP, objPath.prefKP, kp='match', dispExists=True, dirExists=False, img=False) and softLvl<1:
+                            softLvl+=1
+                            asp.parallel_stereo(ASfMFunc.SubArgs_StereoKP_RPC(objPath.prefStereoKP, lstPath, softness=softLvl)+['--stop-point', '2'])
 
-                    if softLvl==3  and not os.path.exists(pathMatch): logger.warning('Check feature: %s'% str(lstId))
+                    if softLvl==1 and not os.path.exists(pathMatch): 
+                        with open(pathMatch+'null', 'wb') as fileOut:
+                            fileOut.write(bytearray())
+                        logger.warning('Check feature: %s'% str(lstId))
 
                     # Remove KP files
                     cmd='rm '+' '.join([' '.join(tupCur) for tupCur in lstPath])
                     os.system(cmd)
                     if os.path.exists(folderSKP): os.system('rm -r %s'% folderSKP)
-                    
-                
+                                    
                 print()
-                
                 # Fixed bundle adjustment: Initial residuals
                 asp.parallel_bundle_adjust(subArgs.KP_RPC(objPath.pProcData, 
                                                           objPath.prefKP, 
@@ -308,27 +330,6 @@ if __name__ == "__main__":
                     
 
                 if iProc <= lstProcLvl.index('eo'): continue
-
-                #---------------------------------------------------------------
-                # RPC adjust IO
-                #---------------------------------------------------------------
-                if args.io and not ASfMFunc.CopyPrevBA(objPath.prefEO, objPath.prefIO):
-                    logger.info('# IO adjustment')
-                    subArgs.IO_RPC(objPath.prefEO, objPath.prefIO, objPath, outGraph=False)
-
-                    if args.ortho:
-                        procBar=ProcessStdout(name='IO ortho',inputCur=nbFeat)
-                        for j in range(nbFeat):
-                            procBar.ViewBar(j)
-                            featCur=objBlocks.lstBFeat[0][j]
-                            idImg=featCur['id']
-                            pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
-                            pathRpcOut=objPath.prefIO+'-'+objPath.extRpc1Bx.format(idImg)
-
-                            pathOrthoOut=objPath.pOrtho.format(idImg, '-IO-RPC')                    
-                            if not os.path.exists(pathOrthoOut): asp.mapproject(ASfMFunc.SubArgs_Ortho(pathImgIn, pathRpcOut, objPath.pDem, pathOrthoOut, args.epsg))
-
-                if iProc <= lstProcLvl.index('io'): continue
 
                 #---------------------------------------------------------------
                 # Export model
@@ -400,11 +401,10 @@ if __name__ == "__main__":
                         if not os.path.exists(pathCamOut): ASfMFunc.AspPnP_ConvertPM(idImg, pathImgIn, pathCamRough, pathCamOut)
 
                     else: # OpenCV EPnP
-                        if not os.path.exists(pathCamOut): ASfMFunc.SRS_OCV(idImg, pathRpcIn, pathCamOut)
+                        if not os.path.exists(pathCamOut): ASfMFunc.PnP_OCV(idImg, pathRpcIn, pathCamOut)
 
                         
-                    if 0:
-                    #if args.ortho:
+                    if args.ortho:
                         pathOrthoOut=objPath.pOrtho.format(idImg, '-Init-PM')
                         if not os.path.exists(pathOrthoOut): asp.mapproject(ASfMFunc.SubArgs_Ortho(pathImgIn, pathCamOut, args.dem, pathOrthoOut, args.epsg))
                 

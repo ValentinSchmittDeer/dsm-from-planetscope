@@ -4,7 +4,7 @@
 import os, sys
 import json
 import logging
-from math import pi, sin, cos, ceil
+from math import pi, sin, cos, ceil, floor
 from copy import copy
 from glob import glob
 import numpy as np
@@ -50,10 +50,9 @@ def ReprojGeom(featIn, epsgOut):
     coordsX, coordsY = pyproj.transform(wgs84, utm, coordsLong, coordsLat)
     
     coordOut=np.append(coordsX[:,np.newaxis], coordsY[:,np.newaxis], axis=1)[np.newaxis,np.newaxis,:,:]
-    featOut=featIn.copy()
-    featOut['geometry']['coordinates']=coordOut.tolist()
+    featIn['geometry']['coordinates']=coordOut.tolist()
 
-    return featOut
+    return featIn
 
 def GardDEM(pathIn, pathOut):
     fileIn=rasterio.open(pathIn)
@@ -72,7 +71,56 @@ def GardDEM(pathIn, pathOut):
         fileOut.write(imgOut.astype(np.float32), 1)
     return 0
 
-def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
+def FilterDmProces(lstFeat, coupleCur, pathPC, formTsai, geomAoi):              
+    # Exists
+    if os.path.exists(pathPC): 
+        
+        # Binary file
+        fileEncode=os.popen('file --mime-encoding %s'% pathPC).read()
+        if fileEncode.strip().split(':')[-1]==' binary': 
+            return False
+        else:
+            return False
+            pass
+
+    # Stereo pair
+    if coupleCur['properties']['nbScene']>2: return False
+    lstId=sorted(coupleCur['properties']['scenes'].split(';'))
+
+    # Ascending/Descending
+    lstSatAz=[lstFeat[i]['properties']['sat:satellite_azimuth_mean_deg'] 
+                    for i in range(len(lstFeat)) 
+                            if lstFeat[i]['id'] in lstId and 
+                                    'sat:satellite_azimuth_mean_deg' in lstFeat[i]['properties']]
+
+    if len(lstSatAz)==2:
+        lstSatAzDiff=[[abs(az-azRef)//satAz_Tol for azRef in satAz_Val] for az in lstSatAz]
+        if not all([0 in tup for tup in lstSatAzDiff]): raise RuntimeError('Input satellite azimut not interpreted (stereopair %i): %s (+/-%i)'% (j, str(lstSatAz), satAz_Tol))
+        setSatOri=set([satAz_Name[tup.index(0)] for tup in lstSatAzDiff])
+        
+        if not len(setSatOri)==1: return False
+        #if 'ascending' in setSatOri: return False
+
+    # Geometry size
+    polyAoi=Polygon(np.array(geomAoi['coordinates']).reshape(-1,2).tolist())
+    polyPair=Polygon(np.array(coupleCur['geometry']['coordinates']).reshape(-1,2).tolist())
+    if not polyPair.intersects(polyAoi): return False
+    if polyPair.intersection(polyAoi).area<tolPairArea: return False
+
+    # Epipolar angle
+    if not all([os.path.exists(formTsai.format(idImg)) for idImg in lstId]): return False
+    lstCamIn=[GeomFunc.TSAIin(formTsai.format(idImg)) for idImg in lstId]
+    epipXaxis=(lstCamIn[1].vectX0-lstCamIn[0].vectX0).flatten()
+    epipXaxis*=1/norm(epipXaxis)
+    epipZaxis=0.5*(lstCamIn[0].matR[-1, :]+lstCamIn[1].matR[-1, :])
+    epipZaxis*=1/norm(epipZaxis)
+    
+    axisAngle=np.arccos(np.abs(np.vdot(epipXaxis, epipZaxis)))*180/pi
+    if round(axisAngle)<tolAxisAngle: return False
+
+    return True
+
+def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False, geomAoi=None):
     '''
     Packed function for dense matching preparation. It can create 
     epipolar images or simply enhanced images (radiometry).
@@ -80,6 +128,8 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
     lstIn (list): list of i, scene and camera path (in tuples)
     geomIn (json): overlap footprint as geojson['geometry'] object
     prefOut (str): output prefix
+    epip (bool): create an epipolar image if True
+    aoi (json): Json feature of the region of interest to mask it in the image
     out:
         0 (int): 
     '''
@@ -92,24 +142,24 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
     def _PrepaRadioImg(i):
         lstImg[i]=lstImg[i].astype(np.float32, copy=False)
 
-        # Copy kernel
-        kernShape=11
-        kernMid=int(kernShape//2)
-        kernCopy=np.zeros([kernShape, kernShape], dtype=np.float32)
-        kernCopy[kernMid, kernMid]=1
-        # DoG kernel
-        gaussSig=3
-        matGausOut=cv.getGaussianKernel(  kernShape, gaussSig)
-        matGausOut*=1/matGausOut.sum()
-        matGausIn=cv.getGaussianKernel(  kernShape, gaussSig*1.6)
-        matGausIn*=1/matGausIn.sum()
-        kernDoG=2*(np.outer(matGausOut, matGausOut)-np.outer(matGausIn, matGausIn))
-        # Convolution
-        kernFull=(kernCopy+kernDoG)
-        cv.filter2D(src=lstImg[i], 
-                   ddepth=-1, 
-                   kernel=kernFull,
-                   dst=lstImg[i])
+        ## Copy kernel
+        #kernShape=11
+        #kernMid=int(kernShape//2)
+        #kernCopy=np.zeros([kernShape, kernShape], dtype=np.float32)
+        #kernCopy[kernMid, kernMid]=1
+        ## DoG kernel
+        #gaussSig=3
+        #matGausOut=cv.getGaussianKernel(  kernShape, gaussSig)
+        #matGausOut*=1/matGausOut.sum()
+        #matGausIn=cv.getGaussianKernel(  kernShape, gaussSig*1.6)
+        #matGausIn*=1/matGausIn.sum()
+        #kernDoG=2*(np.outer(matGausOut, matGausOut)-np.outer(matGausIn, matGausIn))
+        ## Convolution
+        #kernFull=(kernCopy+kernDoG)
+        #cv.filter2D(src=lstImg[i], 
+        #           ddepth=-1, 
+        #           kernel=kernFull,
+        #           dst=lstImg[i])
 
         # Enhancement
         imgData=lstImg[i][np.where(lstImg[i]>0)]
@@ -126,7 +176,20 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
         
         np.clip(lstImg[i], 0, None, out=lstImg[i])
 
-        # Mask
+        # Mask AOI
+        if not geomAoi is None:
+            lstImg[i]=GeomFunc.MaskedImg(  lstImg[i],
+                                        lstCamIn[i], 
+                                        pathDem, 
+                                        geomAoi,
+                                        buffer=margin*3)
+            
+            lstMask[i]=GeomFunc.MaskedImg( lstMask[i],
+                                       lstCamIn[i], 
+                                       pathDem, 
+                                       geomAoi,
+                                       buffer=margin*3)
+        # Mask overlap area
         lstImg[i]=GeomFunc.MaskedImg(  lstImg[i],
                                     lstCamIn[i], 
                                     pathDem, 
@@ -220,40 +283,7 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
         vectOff=minusMinCornProj-np.ones(2)
         vectSize=maxCornProj+minusMinCornProj
         
-        ## Shrink image size
-        #nbPts=len(geomIn['coordinates'][0])
-        #matPtsTransf=np.zeros([2,nbPts,1,2])
-        #for i in range(2):
-        #    matT=lstCamOut[i].matP[:3,:3]@inv(lstCamIn[i].matP[:3,:3])
-        #
-        #    a, matPtsImg=GeomFunc.MaskedImg(lstMask[i], 
-        #                                    lstCamIn[i], 
-        #                                    pathDem, 
-        #                                    geomIn, 
-        #                                    debug=True)
-        #    del a
-        #    matPtsImg_u=cv.undistortPoints(  matPtsImg.reshape(nbPts,1,2).astype(float), 
-        #                                    lstCamIn[i].matK, 
-        #                                    (lstCamIn[i].k1, lstCamIn[i].k2, lstCamIn[i].p1, lstCamIn[i].p2), 
-        #                                    np.eye(3), 
-        #                                    lstCamIn[i].matK)
-        #    matPtsTransf[i]=cv.perspectiveTransform(matPtsImg_u,
-        #                                            matT)
-        #
-        #minPtsTransf=np.floor(np.amin(matPtsTransf, axis=(2,1,0))).astype(int)
-        #maxPtsTransf=np.ceil(np.amax(matPtsTransf, axis=(2,1,0))).astype(int)
-        #offsetPts=-minPtsTransf
-        #sizePts=maxPtsTransf-minPtsTransf
-        ## Shrink x dim
-        #vectOff[0]=offsetPts[0]-margin
-        #vectSize[0]=sizePts[0]+2*margin
-        ## Shrink y dim
-        #vectSize[1]=maxPtsTransf[1]+vectOff[1]+margin
-        
-        if vectSize[0]*vectSize[1]*32<sizeFreeMem/2:
-            return vectOff, vectSize
-        else:
-            return False, False
+        return vectOff, vectSize
 
     if not len(lstIn)==2: SubLogger('CRITICAL', 'lstIn must be of length 2 (stereo pair)')
     if not os.path.exists(os.path.dirname(prefOut)): os.mkdir(os.path.dirname(prefOut))
@@ -265,18 +295,19 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
     lstImg=[cv.imread(lstIn[i][0], cv.IMREAD_GRAYSCALE+(-1)) for i in range(2)]
     lstMask=[np.ones(img.shape, dtype=bool) for img in lstImg]
     lstCamIn=[GeomFunc.TSAIin(lstIn[i][1]) for i in range(2)]
-    
+
     # Epipolar 
     if epip:
         epipXaxis=(lstCamIn[1].vectX0-lstCamIn[0].vectX0).flatten()
+        f=norm(epipXaxis)
         epipXaxis*=1/norm(epipXaxis)
         epipZaxis=0.5*(lstCamIn[0].matR[-1, :]+lstCamIn[1].matR[-1, :])
         epipZaxis*=1/norm(epipZaxis)
         
         axisAngle=np.arccos(np.abs(np.vdot(epipXaxis, epipZaxis)))*180/pi
-        #if axisAngle<80: 
-        #    SubLogger('ERROR', 'Axis angle above 80°: %2f'% axisAngle)
-        #    return 1
+        if round(axisAngle)<tolAxisAngle:
+            SubLogger('ERROR', 'Axis angle smaller than %i°: %2f'% (tolAxisAngle, axisAngle))
+            return 1
 
         r1=epipXaxis
         r2=np.cross(epipZaxis, epipXaxis)
@@ -290,8 +321,8 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False):
         lstCamOut=[_PrepaEpipCam(i) for i in range(2)]
         
         epipOff, epipSize=EpipFrameParam()
-        if type(epipOff)==bool and not epipOff: 
-            SubLogger('ERROR', 'Epipolar image too large')
+        if epipSize[0]*epipSize[1]*32>sizeFreeMem/2:
+            SubLogger('ERROR', 'Epipolar image too large: %.2f GB'% (epipSize[0]*epipSize[1]*32/1024**3))
             return 1
         # S: Shift
         epipS=np.eye(3)
@@ -386,42 +417,88 @@ def SubArgs_Stereo(lstPath, prefOut, epip=False):
 
     return subArgs
 
-def MergeDisparities(prefLeft, prefRight, thresh=1):
+def MergeDisparities(prefLeft, prefRight, gdalDock):
+    
+    def Merge_OpenCV(pathLeft, pathRight, imgLeft):
+        imgRight= cv.imread(pathRight, cv.IMREAD_LOAD_GDAL)
+        if imgRight is None: 
+            SubLogger('ERROR', 'Cannot read right disparity image')
+            return False
+        if not imgLeft.shape==imgRight.shape: 
+            SubLogger('ERROR', 'Disparities images with different size: %s VS %s'% (str(imgLeft.shape), str(imgRight.shape)))
+            return False
+        r,c,b=imgLeft.shape
+        
+        # Right image shift
+        medLeft, medRight=np.median(imgLeft[imgLeft[:,:,0]==1,2]), np.median(imgRight[imgRight[:,:,0]==1,2])
+        if floor(abs(medLeft+medRight))//2: 
+            SubLogger('ERROR', 'Disparitiy median above 1 pixels: %.2f'% (medLeft+medRight))
+            return False
+        shift=int(round(0.5*(medLeft-medRight)))
+        if shift<0:
+            imgRight=np.append(np.zeros([r,-shift,b], dtype=np.float32), imgRight[:,:shift,:], axis=1)
+        else:
+            SubLogger('WARNING', 'Positive disparitiy case, please check it')
+            imgRight=np.append(imgRight[:,shift:,:], np.zeros([r,shift,b], dtype=np.float32), axis=1)
+        
+        # Disparity mask
+        matOut=np.repeat((imgLeft[:,:,0]*imgRight[:,:,0])[:,:,np.newaxis], 3, axis=2).astype(np.float32)
+        # Disparity mean
+        matOut[:,:,1:]*=0.5*(imgLeft[:,:,1:]-imgRight[:,:,1:])
+        # Disparitiy difference (filtered out)
+        threshDispI=np.abs(norm(imgLeft[:,:,1:]+imgRight[:,:,1:], axis=2))>tolDispDiff
+        matOut[threshDispI,:]=np.zeros(3)
+        
+        if os.path.exists(pathLeft): os.remove(pathLeft)
+        cv.imwrite(pathLeft.replace('.tif','.exr'), matOut.astype(np.float32), [cv.IMWRITE_EXR_TYPE, cv.IMWRITE_EXR_TYPE_FLOAT])
+
+        return pathLeft
+    
+    def Merge_GDAL(pathLeft, pathRight):
+        SubLogger('ERROR', 'Cannot read large disparity images, need Merge_GDAL() function')
+        return False
+        gdal=DockerLibs.GdalPython()
+
+        dirTilesLeft=pathLeft.replace('.tif', '_Tiles')
+        os.mkdir(dirTilesLeft)
+        gdal.gdal_retile(['-ps 4000 %i'%  lstNbPix[1],'-targetDir', dirTilesLeft, pathLeft])
+
+        dirTilesRight=pathRight.replace('.tif', '_Tiles')
+        os.mkdir(dirTilesRight)
+        gdal.gdal_retile(['-ps 4000 %i'%  lstNbPix[1],'-targetDir', dirTilesRight, pathRight])
+
+        lstPathLeft=sorted(glob(os.path.join(dirTilesLeft, '*')))
+        n=len(lstPathLeft)
+        if not len(glob(os.path.join(dirTilesRight, '*')))==n:
+            SubLogger('ERROR', 'Disparities images with different size')
+            return False
+
+        # Mean disparity
+        for i in range(n):
+            pathLeftT=lstPathLeft[i]
+            pathRightT=pathLeftT.replace('Left', 'Right')
+            print(pathLeftT, pathRightT)
+
+            sys.exit()
+        return pathLeft
+
     extFiltered='-F.tif'
     pathDispLeft=prefLeft+extFiltered
     pathDispRight=prefRight+extFiltered
-    if not os.path.exists(pathDispLeft) or not os.path.exists(pathDispRight): SubLogger('CRITICAL', 'Disparities images not found')
-    
-    imgDispLeft = cv.imread(pathDispLeft, cv.IMREAD_LOAD_GDAL)
-    imgDispRight= cv.imread(pathDispRight, cv.IMREAD_LOAD_GDAL)
-    if not imgDispLeft.shape==imgDispRight.shape: SubLogger('CRITICAL', 'Disparities images with different size: %s VS %s'% (str(imgDispLeft.shape), str(imgDispRight.shape)))
-    r,c,b=imgDispLeft.shape
-    
-    # Right image shift
-    medLeft, medRight=np.median(imgDispLeft[imgDispLeft[:,:,0]==1,2]), np.median(imgDispRight[imgDispRight[:,:,0]==1,2])
-    if int(medLeft+medRight): 
-        SubLogger('ERROR', 'Disparitiy median above 1 pixels: %.2f'% (medLeft+medRight))
+    if not os.path.exists(pathDispLeft) or not os.path.exists(pathDispRight): 
+        SubLogger('CRITICAL', 'Disparities images not found (Left, Right): %s, %s'% (os.path.exists(pathDispLeft), os.path.exists(pathDispRight)))
         return False
-    shift=int(round(0.5*(medLeft-medRight)))
-    if shift<0:
-        imgDispRight=np.append(np.zeros([r,-shift,b], dtype=np.float32), imgDispRight[:,:shift,:], axis=1)
+
+    readCheck, lstMat = cv.imreadmulti(   pathDispLeft, [], cv.IMREAD_LOAD_GDAL)
+    if readCheck: 
+        pathDispLeft=Merge_OpenCV(pathDispLeft, pathDispRight, lstMat[0])
     else:
-        SubLogger('WARNING', 'Positive disparitiy case, please check it')
-        imgDispRight=np.append(imgDispRight[:,shift:,:], np.zeros([r,shift,b], dtype=np.float32), axis=1)
+        pathDispLeft=Merge_GDAL(pathDispLeft, pathDispRight)
     
-    # Disparity mask
-    matOut=np.repeat((imgDispLeft[:,:,0]*imgDispRight[:,:,0])[:,:,np.newaxis], 3, axis=2).astype(np.float32)
-    # Disparity mean
-    matOut[:,:,1:]*=0.5*(imgDispLeft[:,:,1:]-imgDispRight[:,:,1:])
-    # Disparitiy difference (filtered out)
-    threshDispI=np.abs(norm(imgDispLeft[:,:,1:]+imgDispRight[:,:,1:], axis=2))>thresh
-    matOut[threshDispI,:]=np.zeros(3)
-    
-    if os.path.exists(pathDispLeft): os.remove(pathDispLeft)
-    cv.imwrite(pathDispLeft.replace('.tif','.exr'), matOut.astype(np.float32), [cv.IMWRITE_EXR_TYPE, cv.IMWRITE_EXR_TYPE_FLOAT])
-    
+    if pathDispLeft:
+        gdalDock.gdal_translate(['-if', '"EXR"', pathDispLeft.replace('.tif','.exr'), pathDispLeft])
     return pathDispLeft
-    
+ 
 def SubArgs_P2D(pathPCIn, epsgCur):
     # Arguments
     subArgs=['--transverse-mercator',
@@ -488,13 +565,11 @@ def AspPc2Txt(pathIn):
         if not 'POINT_OFFSET' in tagsCur: return 1
 
         matOffset=np.array([float(off) for off in tagsCur['POINT_OFFSET'].split()])
-        matPtsFull=np.zeros([imgIn.width*imgIn.height, 4], dtype=np.float64)
-        for i in imgIn.indexes:
-            matPtsFull[:,i-1]=imgIn.read(i).flatten()  
+        matPtsFull=imgIn.read().reshape(4,-1).T
           
     # logical OR on (x, y, z)
-    checkPts=np.sum(np.abs(matPtsFull), axis=1)>0
-    matPtsCart=matPtsFull[checkPts].astype(np.float64)
+    maskPts=np.bool_(np.sum(np.abs(matPtsFull), axis=1))
+    matPtsCart=matPtsFull[maskPts]
     del matPtsFull
     
     nbPts=matPtsCart.shape[0]
@@ -502,8 +577,6 @@ def AspPc2Txt(pathIn):
     # X=dX+Ox, Y=dY+Oy, Z=dZ+Oz, Intensity=e*1000
     matPtsCart+=np.append(matOffset, [0])
     matPtsCart[:,3]*=1000
-
-    lstPtsStr=[' '.join(lstLine)+'\n' for lstLine in matPtsCart.astype(str)]
     
     fileOut=open(pathTxt, 'w')
     fileOut.write('X Y Z Intensity\n')
@@ -555,7 +628,8 @@ def PdalJson(pathObj):
         fileOut.writelines(json.dumps({"pipeline": 
                                         ["PathIn.las",
                                         {
-                                          "type":"filters.elm"
+                                          "type":"filters.elm",
+                                          #"threshold":"2.0",
                                         },
                                         {
                                           "type":"filters.outlier"
@@ -752,7 +826,7 @@ def PC2Raster(pathIn, pathOut, lstIndex, pathJson, pdalTool):
     np.clip(matMeanW, 1, None, out=matMeanW)
 
     # Update profile
-    profileImg['count']=5
+    profileImg['count']=3
 
     if not (profileImg['width']>0 and profileImg['height']>0 and profileImg['width']*profileImg['height']>0):
         return os.system(cmdClean)
@@ -774,17 +848,19 @@ def PC2Raster(pathIn, pathOut, lstIndex, pathJson, pdalTool):
         matOut[indexNoData]=-32767
         imgOut.write(matOut,1)
         imgOut.set_band_description(2, 'Accuracy') 
-        matOut=matStdev+np.sqrt(1000/matMeanW-1)
+        matOut=matStdev+np.sqrt(1000/matMeanW/matCount-1)
         matOut[indexNoData]=-32767
         imgOut.write(matOut,2)
-        imgOut.set_band_description(3, 'Stdev Pts')
-        imgOut.write(matStdev,3)
-        imgOut.set_band_description(4, 'Stdev Intersec')
-        matOut=np.sqrt(1000/matMeanW-1)
-        matOut[indexNoData]=-32767
-        imgOut.write(matOut,4)
-        imgOut.set_band_description(5, 'Count Pts')
-        imgOut.write(matCount,5)        
+        imgOut.set_band_description(3, 'PtCount')
+        imgOut.write(matCount,3)
+        #imgOut.set_band_description(3, 'Stdev Pts')
+        #imgOut.write(matStdev,3)
+        #imgOut.set_band_description(4, 'Stdev Intersec')
+        #matOut=np.sqrt(1000/matMeanW/matCount-1)
+        #matOut[indexNoData]=-32767
+        #imgOut.write(matOut,4)
+        #imgOut.set_band_description(5, 'Count Pts')
+        #imgOut.write(matCount,5)        
 
     cmdClean='rm %s'% ' '.join(list(lstPath)+[pathJsonCur,])
     return os.system(cmdClean)

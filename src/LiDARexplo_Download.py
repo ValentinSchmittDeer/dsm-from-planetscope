@@ -14,7 +14,9 @@ __author__='Valentin Schmitt'
 __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
-    
+     Main Task
+Loop the USGS tile download from the Amazon AWS bucket. It follows a tile
+geojson descriptor with tile name asa "location" attribute.
 
 **************************************************************************
 > 

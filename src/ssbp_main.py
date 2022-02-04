@@ -2,7 +2,6 @@
 # -*- coding: UTF-8 -*-'''
 
 import os, sys, argparse, time
-from pprint import pprint
 import json
 from datetime import datetime
 from shutil import copy2
@@ -29,13 +28,16 @@ If a previous search result is fit in, the 'former search' mode skips
 the API search request.
 
 **************************************************************************
-> Authentication
-> Create filter with input arguments
+> Create strict filter with input arguments
 > Fire off the request and store it
-> Block creation and filtering
-> Scene pair retrieval 
-> Coverge image creation
-> Create data repository and block desciptors
+> Create blocks
+> Filter blocks (footprint)
+> Extract extended metadata
+> Couple block scenes (pairs)
+> Record coverage image
+> Filter blocks (B/H ratio)
+> Replace coverage image
+> Couple block scenes (pairs, triplet, etc)
 
 **************************************************************************
 '''% (__title__,__version__,__author__),
@@ -49,10 +51,46 @@ lstInst=('PS2', 'PS2.SD', 'PSB.SD')
 # Hard command
 #-----------------------------------------------------------------------
 
-def Main(args):
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
     try:
         print()
         logger = SetupLogger(name=__title__)
+        #---------------------------------------------------------------
+        # Retrieval of arguments
+        #---------------------------------------------------------------
+        parser.add_argument('-i', required=True, help='Input geometry (geojson)')
+        parser.add_argument('-o', required=True, help='Working directory for outputs')
+
+        # Optional search parameters
+        parser.add_argument('-iSrch', help='Input former search result (json), cancels another search step')
+        
+        # Block parameters
+        parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
+        parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: False)')
+        parser.add_argument('-cov', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
+        
+        # Filter parameters
+        parser.add_argument('-fFP', action='store_false', help='Footprint filtering (default: True)')
+        parser.add_argument('-fBH', action='store_true', help='B/H filtering (default: False)')
+        parser.add_argument('-fBHred', default=0, type=int, help='B/H filtering redundancy (default: 0)')
+
+        # Database search strict parameters
+        parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
+        parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
+        parser.add_argument('-cloudUnder', type=int, default=10, help='Maximum cloud coverage, %% integer (default: 10)')
+        parser.add_argument('-dateAcq', nargs=2, help='Acquisition date yyyy-mm-dd past in the order')
+        parser.add_argument('-inst', nargs='+', default=['PS2'], help='Dove generation(s) <PS2|PS2.SD|PSB.SD> (default:PS2)')
+        parser.add_argument('-viewAngle', type=float, help='Maximum view angle')
+        parser.add_argument('-gsd', type=float, help='Maximum gsd')
+        parser.add_argument('-quali', help='Product quality')
+        parser.add_argument('-sunElevation', default=20, help='Minimum sun elevation (default: 20°)')
+        lstKeySearch=('itemType', 'assetType', 'cloudUnder', 'dateAcq', 'inst', 'viewAngle', 'gsd', 'quali')
+
+        args = parser.parse_args()
+
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
@@ -170,10 +208,10 @@ def Main(args):
         # Block creation
         #---------------------------------------------------------------
         logger.info('# Block creation')
-        objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
+        objBlocks=blockFunc.SceneBlocks(args.o, meth='dir')
         if not objBlocks.nbB:
             del objBlocks
-            objBlocks=blockFunc.SceneBlocks(lstFeat, args.o, args.b)
+            objBlocks=blockFunc.SceneBlocks(args.o, lstIn=lstFeat, meth=args.b)
         
         logger.info(objBlocks)
         del lstFeat, objBlocks
@@ -184,7 +222,7 @@ def Main(args):
         if args.fFP:
             logger.info('# Block footprint filtering')
             filterFunc.FilterBlocks(args.o, 'fp')
-            objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
+            objBlocks=blockFunc.SceneBlocks(args.o, meth='dir')
             logger.info(objBlocks)
             del objBlocks
 
@@ -222,7 +260,7 @@ def Main(args):
             logger.info('# Block B/H filtering and block update')
 
             filterFunc.FilterBlocks(args.o, 'bh', aoi=featAoi, red=args.fBHred)
-            objBlocks=blockFunc.SceneBlocks([], args.o, 'dir')
+            objBlocks=blockFunc.SceneBlocks(args.o, meth='dir')
             logger.info(objBlocks)
             del objBlocks
 
@@ -239,42 +277,3 @@ def Main(args):
     #---------------------------------------------------------------
     except RuntimeError as msg:
         logger.critical(msg)
-
-#=======================================================================
-#main
-#-----------------------------------------------------------------------
-if __name__ == "__main__":
-        #---------------------------------------------------------------
-        # Retrieval of arguments
-        #---------------------------------------------------------------
-        parser.add_argument('-i', required=True, help='Input geometry (geojson)')
-        parser.add_argument('-o', required=True, help='Working directory for outputs')
-
-        # Optional search parameters
-        parser.add_argument('-iSrch', help='Input former search result (json), cancels another search step')
-        
-        # Block parameters
-        parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
-        parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: False)')
-        parser.add_argument('-cov', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
-        
-        # Filter parameters
-        parser.add_argument('-fFP', action='store_false', help='Footprint filtering (default: True)')
-        parser.add_argument('-fBH', action='store_true', help='B/H filtering (default: False)')
-        parser.add_argument('-fBHred', default=0, type=int, help='B/H filtering redundancy (default: 0)')
-
-        # Database search strict parameters
-        parser.add_argument('-itemType', nargs='+', default=['PSScene3Band', 'PSScene4Band'], help='Item type from Planet API list <PSScene3Band|PSScene4Band|...> (default: PSScene3Band, PSScene4Band)')
-        parser.add_argument('-assetType', nargs='+', default=['basic_analytic', ], help='Asset type from Planet API list <basic_analytic|analytic|...> (default: basic_analytic)')
-        parser.add_argument('-cloudUnder', type=int, default=10, help='Maximum cloud coverage, %% integer (default: 10)')
-        parser.add_argument('-dateAcq', nargs=2, help='Acquisition date yyyy-mm-dd past in the order')
-        parser.add_argument('-inst', nargs='+', default=['PS2'], help='Dove generation(s) <PS2|PS2.SD|PSB.SD> (default:PS2)')
-        parser.add_argument('-viewAngle', type=float, help='Maximum view angle')
-        parser.add_argument('-gsd', type=float, help='Maximum gsd')
-        parser.add_argument('-quali', help='Product quality')
-        parser.add_argument('-sunElevation', default=20, help='Minimum sun elevation (default: 20°)')
-        lstKeySearch=('itemType', 'assetType', 'cloudUnder', 'dateAcq', 'inst', 'viewAngle', 'gsd', 'quali')
-
-        argsMain = parser.parse_args()
-
-        Main(argsMain)
