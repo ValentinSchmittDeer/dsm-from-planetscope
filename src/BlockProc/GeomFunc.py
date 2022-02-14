@@ -19,8 +19,6 @@ if checkPlanetCommon:
 else:
     import cv2 as cv
 
-
-
 from OutLib.LoggerFunc import *
 
 #-----------------------------------------------------------------------

@@ -10,15 +10,18 @@ from pprint import pprint
 
 from OutLib.LoggerFunc import *
 from VarCur import *
+from PCT.dataFunc import CheckPC
 
 #-----------------------------------------------------------------------
 # Hard argument
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['AspPython']
+__all__ =['AspPython', 'PdalPython', 'GdalPython']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
+checkPC=CheckPC()
+lstDockerImgs=[lineCur.split()[0] for lineCur in os.popen('docker images').readlines()][1:]
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
@@ -35,17 +38,10 @@ class AspPython():
     nameImage='us.gcr.io/planet-ci-prod/stereo_docker2'
 
     def __init__(self):
-        # Automatic environement selection
-        from importlib.util import find_spec
-        moduleSpec=find_spec('planet_common')
-        
-        # Check whether the container exists
-        with os.popen('docker images') as cmdIn:
-            txtCmdIn=cmdIn.read()
-        if not self.nameImage in txtCmdIn: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
+        if not self.nameImage in lstDockerImgs: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
 
         # Vagrant or GVM 
-        if moduleSpec:
+        if checkPC:
             # mount data directories
             self.rootFolder='/vagrant'
 
@@ -57,7 +53,7 @@ class AspPython():
 
         # Local system
         else:
-            self.rootFolder='/home/valentinschmitt'
+            self.rootFolder='/home'
         
         self.cmdDocker='docker run -it -v {0}:{0} {1}:latest'.format(self.rootFolder, self.nameImage)
 
@@ -169,7 +165,6 @@ class AspPython():
     def point2las(self, subArgs):
         return self._RunCmd_debug('point2las', subArgs)
 
-
 class PdalPython():
     '''
     PDL command lines in python env. 
@@ -183,17 +178,10 @@ class PdalPython():
     nameImage='pdal/pdal'
 
     def __init__(self):
-        # Automatic environement selection
-        from importlib.util import find_spec
-        moduleSpec=find_spec('planet_common')
-        
-        # Check whether the container exists
-        with os.popen('docker images') as cmdIn:
-            txtCmdIn=cmdIn.read()
-        if not self.nameImage in txtCmdIn: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
+        if not self.nameImage in lstDockerImgs: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
 
         # Vagrant or GVM 
-        if moduleSpec:
+        if checkPC:
             # mount data directories
             self.rootFolder='/vagrant'
 
@@ -205,7 +193,7 @@ class PdalPython():
 
         # Local system
         else:
-            self.rootFolder='/home/valentinschmitt'
+            self.rootFolder='/home'
         
         self.cmdDocker='docker run -it -v {0}:{0} {1}:latest'.format(self.rootFolder, self.nameImage)
 
@@ -298,17 +286,10 @@ class GdalPython():
     nameImage='osgeo/gdal'
 
     def __init__(self):
-        # Automatic environement selection
-        from importlib.util import find_spec
-        moduleSpec=find_spec('planet_common')
-        
-        # Check whether the container exists
-        with os.popen('docker images') as cmdIn:
-            txtCmdIn=cmdIn.read()
-        if not self.nameImage in txtCmdIn: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
+        if not self.nameImage in lstDockerImgs: SubLogger('CRITICAL', 'sudo docker pull %s'% self.nameImage)  
 
         # Vagrant or GVM 
-        if moduleSpec:
+        if checkPC:
             # mount data directories
             self.rootFolder='/vagrant'
 
@@ -320,7 +301,7 @@ class GdalPython():
 
         # Local system
         else:
-            self.rootFolder='/home/valentinschmitt'
+            self.rootFolder='/home'
         
         self.cmdDocker='docker run -it -v {0}:{0} {1}:latest'.format(self.rootFolder, self.nameImage)
 
@@ -399,7 +380,6 @@ class GdalPython():
 
     def gdal_retile(self, subArgs):
         return self._RunCmd('gdal_retile.py', subArgs)
-
 
 #=======================================================================
 #main

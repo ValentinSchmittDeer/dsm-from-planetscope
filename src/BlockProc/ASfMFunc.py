@@ -37,7 +37,7 @@ from PCT import pipelDFunc
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =[]
+__all__ =['SubArgs_Ortho', 'SubArgs_StereoKP_RPC', 'SubArgs_Adj2Rpc', 'SubArgs_BunAdj', 'SingleBandImg', 'StereoDescriptor', 'MaskedImg_KP', 'AspPnP_RPCwithoutDisto', 'AspPnP_SubArgs_Camgen', 'AspPnP_ConvertPM', 'PnP_OCV', 'KpCsv2Geojson', 'CopyPrevBA', 'KpCsv2Gcp']
 SetupLogger(name=__name__)
 #SubLogger('ERROR', 'jojo')
 
@@ -180,7 +180,7 @@ def SubArgs_Adj2Rpc(pathImgIn, pathRpcIn, pathDemIn, pathRpcOut, prefBA=None):
 
 class SubArgs_BunAdj:
     '''
-    Bundle_adjust parameters object
+    Create a list of bundle_adjust parameters. Several cases are available as functions.
 
     pathObj (obj): PathCur class from VarCur
     lstPairs (list): list of image ID
@@ -470,7 +470,10 @@ def StereoDescriptor(pathObj, lstPairs):
                     fileOut.writelines(lstOut)
     return 0
 
-def MaskedImg_KP(pathImgIn, pathRpc, pathDem, geomIn, pathImgOut, b=10)
+def MaskedImg_KP(pathImgIn, pathRpc, pathDem, geomIn, pathImgOut, b=10):
+    '''
+    Mirror to the GeomFunc.MaskedImg function.
+    '''
     return GeomFunc.MaskedImg( pathImgIn, pathRpc, pathDem, geomIn, pathImgOut=pathImgOut, buffer=b)
 
 def AspPnP_RPCwithoutDisto(sceneId, pathRpcIn, pathRpcOut):

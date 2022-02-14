@@ -22,9 +22,14 @@ __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
     Main Task
-
+Visualisation tool for bundle adjustment conrtole. From intial camera files 
+(-init) and bundle adjustment folder (-ba) , it returns tables of graphs. 
+It also supports camera file directories (instead of bundle adjustment) 
+with the -cam input.
 **************************************************************************
-> Steps
+> -table, -longTable: change table 
+> -graphEO: 3D graph with camera centres and orientations
+> -graphKP: key points changes at ground positions
 **************************************************************************
 '''% (__title__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)

@@ -23,7 +23,7 @@ from BlockProc import GeomFunc
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['ExtractOriOffeset', 'ExtractDisto']
+__all__ =['ExtractFrameOffset', 'ExtractDisto']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 
@@ -37,9 +37,8 @@ def ExtractFrameOffset(pathIn, rpcIn=None, nbTile=1):
     Return the origin offset (top-left) because Dove-Clasic L1A products 
     are not all cropped the same. Offset = L0_origin (top-left) w.r.t. 
     cropped scene origin.
-    From tif input, hard coded and known scene height select 
-    the right offset.
-    It can be replaced by RPC reading (offset)
+    From tif input, hard coded and known scene height select the right offset.
+    It can be replaced by RPC reading (offset) which is safer and lighter.
     
 
     pathIn (str): input path (tif)
@@ -73,7 +72,7 @@ def ExtractFrameOffset(pathIn, rpcIn=None, nbTile=1):
 
 def ExtractDisto(sceneId, modType, rpcPath=None):
     '''
-    Read distortion model from planet_common config file
+    Read distortion model from planet_common config file.
 
     sceneId (str): scene ID (dddddddd_hhhhhh_iii)
     modType ('photometrix'|'tsai'): distortion type (add/remove, normalisation)

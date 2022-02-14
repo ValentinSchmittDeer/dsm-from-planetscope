@@ -200,7 +200,7 @@ if __name__ == "__main__":
                     fileGeojson.write(lineEnd+json.dumps(objBlocks.lstBCouple[0][k]))
 
                 fileGeojson.write(']\n}')
-            
+            #sys.exit()
             #---------------------------------------------------------------
             # Dense matching pairwise
             #---------------------------------------------------------------

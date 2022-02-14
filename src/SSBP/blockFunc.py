@@ -67,7 +67,7 @@ class SceneBlocks():
         '''
         Main block creation function leading to Build_xx functions
         '''
-        self.nbFeat=len(lstIn)
+        if not lstIn is None:self.nbFeat=len(lstIn)
         self.method=meth
         if not os.path.isdir(pathCur): SubLogger('CRITICAL', 'pathCur must be a directory')
         self.dirOut=pathCur
@@ -267,6 +267,7 @@ class SceneBlocks():
             if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% nameBFile.format(nameB, 'Search.json'))
             with open(pathDescip) as fileIn:
                 geojsonTxt=json.load(fileIn)
+
                 self.lstBFeat.append(geojsonTxt['Features'])
 
             # Block ID list and feat number

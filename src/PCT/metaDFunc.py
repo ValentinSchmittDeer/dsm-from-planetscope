@@ -16,24 +16,28 @@ from BlockProc.GeomFunc import Geo2Cart_Elli
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['CheckPC', ]
+__all__ =['CheckPC', 'ExtractMD_Blocks', 'ExtractMD_Scene']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
 def CheckPC():
+    '''
+    Control whether it runs in planet_common environement.
+    
+    out:
+        out (bool): True=planet_comon
+    '''
     from importlib.util import find_spec
     moduleSpec=find_spec('planet_common')
     return (moduleSpec is not None)
 
 def ExtractMD_Blocks(pathIn, lstMD, lstBName=False):
     '''
-    Manage the metadata extraction from a block object (SSBP:BlockFunc:SceneBlocks).
-    It runs the metadata extraction function for each found scene and add them 
-    into the features properties (SSBP:BlockFunc:SceneBlocks:lstBFeat). These will 
-    be stored in the geojson file (xx_Serach) and used by scene coupling if 
-    they are available.
+    Manage the metadata extraction from a "select" file. It runs the metadata 
+    extraction function for each found scene and add them into the features 
+    properties before "select" file update. It skips existing values.
 
     objBlock (obj): object SSBP:BlockFunc:SceneBlocks
     lstMD (list): list of metadata path (e.g.: 'sat:alt')
@@ -141,15 +145,6 @@ def ExtractMD_Scene(descripScene, lstMD):
                 descripScene['properties'][nameTag]=float(mdCur)
             except ValueError:
                 descripScene['properties'][nameTag]=str(mdCur)
-    
-    
-
-
-
-
-
-
-
 
 #=======================================================================
 #main

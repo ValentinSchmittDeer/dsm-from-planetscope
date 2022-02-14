@@ -25,7 +25,8 @@ __author__='Valentin Schmitt'
 __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
-    GCP tool selection from computer vision course.
+    Main Task
+Build up a epipolar tool image geometry controle. It read phyiscal models.
 
 **************************************************************************
 > Read ORI files
@@ -425,6 +426,7 @@ if __name__ == "__main__":
         parser.add_argument('-img1', required=True,help='Image1 path')
         parser.add_argument('-img2', required=True,help='Image2 path')
         parser.add_argument('-camName', required=True,help='Camera name fromat (e.g. {}.tsai)')
+        # ORI file not in-use
         parser.add_argument('-oriForm', default='/Volumes/LocalData/valentin/Data/Geoengine/S3_CompVis/CompVis_Labs/Format.ori',help='Ori form file path')
         
         parser.add_argument('-s',type=float,default=1,help='Window size, [0, 1] per dim')

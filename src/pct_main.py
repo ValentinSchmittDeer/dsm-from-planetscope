@@ -19,9 +19,17 @@ __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
     Main Task
-
+Planet common interface for product creation and downloading. It holds the
+default repository sturcture and variable and runs planet_common tools
+(scripts, functions) to read, create or download scenes according to the 
+requested action: info|match|list|create|download
 **************************************************************************
-> Steps
+> info: list available buckets on GCP and compare them to descriptors and 
+    local storage
+> match: compare descriptors, local and cloud files
+> list: list descriptors, local and cloud files
+> create: fire off product creation requests to the GCP
+> download: download scene from GCP to local storage (and resume failed downloads)
 **************************************************************************
 '''% (__title__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -33,8 +41,28 @@ formatter_class=argparse.RawDescriptionHelpFormatter)
 #-----------------------------------------------------------------------
 # Hard command
 #-----------------------------------------------------------------------
-def Main(args):
+
+#=======================================================================
+#main
+#-----------------------------------------------------------------------
+if __name__ == "__main__":
     try:
+        print()
+        logger = SetupLogger(name=__title__)
+        #---------------------------------------------------------------
+        # Retrieval of arguments
+        #---------------------------------------------------------------
+        parser.add_argument('-i', required=True, help='Working directory')
+        parser.add_argument('-n', required=True, help='Aoi Name')
+        
+        # Optional arguments
+        parser.add_argument('-b',nargs='+', default=False, help='Block name to process (default: Fasle means all)')
+        parser.add_argument('-l', help='Product process level (default: from VarCur)')
+        parser.add_argument('-a', nargs='+', default=['info'], help='Action(s) <info|match|list|create|download> (default: info)')
+        
+
+        args = parser.parse_args()
+        
         #---------------------------------------------------------------
         # Check input
         #---------------------------------------------------------------
@@ -43,7 +71,7 @@ def Main(args):
         if '_' in args.n or '-' in args.n: raise RuntimeError("Name AOI cannot contain '_' or '-'")
         
         if not args.l: 
-            args.l= list(dicLevel.keys())[0]
+            args.l= sorted(list(dicLevel.keys()))[0]
         else:
             if not args.l in lstLevel: raise RuntimeError("-l must be one of %s"% str(lstLevel))
         
@@ -108,26 +136,3 @@ def Main(args):
     #---------------------------------------------------------------
     except RuntimeError as msg:
         logger.critical(msg)
-
-#=======================================================================
-#main
-#-----------------------------------------------------------------------
-if __name__ == "__main__":
-    
-        print()
-        logger = SetupLogger(name=__title__)
-        #---------------------------------------------------------------
-        # Retrieval of arguments
-        #---------------------------------------------------------------
-        parser.add_argument('-i', required=True, help='Working directory')
-        parser.add_argument('-n', required=True, help='Aoi Name')
-        
-        # Optional arguments
-        parser.add_argument('-b',nargs='+', default=False, help='Block name to process (default: Fasle means all)')
-        parser.add_argument('-l', help='Product process level (default: from VarCur)')
-        parser.add_argument('-a', nargs='+', default=['info'], help='Action(s) <info|match|list|create|download> (default: info)')
-        
-
-        argsMain = parser.parse_args()
-        
-        Main(argsMain)

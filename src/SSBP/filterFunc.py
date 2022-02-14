@@ -18,7 +18,7 @@ from SSBP.blockFunc import SceneBlocks
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['FilterBlock', 'Filter_Footprint', 'QGeomDiff', 'QSunEDiff', 'QCloudDiff', 'QualiDiff', 'QSatAzDiff']
+__all__ =['FilterBlocks', 'Filter_Footprint', 'Filter_BHratio']
 SetupLogger(name=__name__)
 #SubLogger('WARNING', 'jojo')
 #-----------------------------------------------------------------------
@@ -83,8 +83,9 @@ def FilterBlocks(pathIn, fType, lstBName=False, aoi=None, red=None):
 
 def Filter_Footprint(lstBFeatCur):
     '''
-    Select scenes in a block based on footprint intersection several criteria. It reduces 
-    the scene number.
+    Select scenes based on footprint intersection. The scene selection 
+    uses several criteria with QxxDiff functions. It reduces the scene 
+    number.
 
     bI (int): list ID of the block. For instance, bI=0 means 
         the first one with block ID=self.lstBId[0][0]
@@ -247,9 +248,8 @@ def QSatAzDiff(feat1, feat2, tol):
 
 def Filter_BHratio(lstBFeatCur, lstBCoupleCur, aoiIn, red, pathOut, disp=False):
     '''
-    From the given filtered scene list (may be One or Month block, 
-    may be pre-filtered using footprint), it select the best scenes
-    according to their B/H ratio. It relies on Pairs.geojson which
+    From the given filtered scene list, it select the best scenes
+    according to their B/H ratio. It relies on stereo.geojson which
     must include the B/H ratio (from extented MD)
 
     lstBFeatCur (list): list of scene descriptors to update

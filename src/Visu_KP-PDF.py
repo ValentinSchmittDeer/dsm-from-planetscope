@@ -22,9 +22,11 @@ __version__=1.0
 parser = argparse.ArgumentParser(description='''
 %s (v%.1f by %s):
     Main Task
-
+Print key point dispalcement Power Density Functions (geographic coordinates 
+only). It requires "_residuals_no_loss_function_pointmap_point_log.geojson" 
+files.
 **************************************************************************
-> Steps
+> 
 **************************************************************************
 '''% (__title__,__version__,__author__),
 formatter_class=argparse.RawDescriptionHelpFormatter)

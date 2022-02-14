@@ -26,11 +26,6 @@ def SetupLogger(name='', output=None, *, color=True ):
     output (str): a file name or a directory to save log. If None, will not save log file.
             If ends with ".txt" or ".log", assumed to be a file name.
             Otherwise, logs will be saved to `output/log.txt`.
-    
-    
-
-    Returns:
-        logging.Logger: a logger
     '''
     abbrev_name=''.join([char for char in name if char.isupper()])
     
@@ -75,6 +70,9 @@ def SetupLogger(name='', output=None, *, color=True ):
     return logger
 
 class _ColorfulFormatter(logging.Formatter):
+    '''
+    Manage coloured output
+    '''
     def __init__(self, *args, **kwargs):
         self._root_name = kwargs.pop("root_name") + "."
         self._abbrev_name = kwargs.pop("abbrev_name", "")
@@ -97,11 +95,12 @@ class _ColorfulFormatter(logging.Formatter):
 
 def SubLogger(lvl, msg, *, name=None):
     """
-    Log only for the first n times.
-    Args:
-        lvl (str): the logging level (uppercase) based on logging lib
-        msg (str):
-        name (str): name of the logger to use. Will use the caller's module by default.
+    Logger setup for function call. It exits the script
+    with "CRITICAL" call.
+
+    lvl (str): the logging level (uppercase) based on logging lib
+    msg (str):
+    name (str): name of the logger to use. Will use the caller's module by default.
     """
     caller_module, caller_key = _find_caller()
     
@@ -132,7 +131,7 @@ def SubLogger(lvl, msg, *, name=None):
 
 def _find_caller():
     """
-    Returns:
+    out:
         str: module name of the caller
         tuple: a hashable key to be used to identify different callers
     """
@@ -150,7 +149,8 @@ class ProcessStdout:
     Process progress stdout. Works in 2 modes: bar [default] and list.
     The Bar mode displays an overwriting progress bar based on maximum i and 
     current i. The List mode returns the standard output string used in logger
-    based on full list and index number i.
+    based on full list and index number i. Some issues remains with multiprocess
+    calls.
     
     name (string): process name
     mode (string: bar|list): mode selection [default=bar]
@@ -276,5 +276,3 @@ def PrintPsItem(lstIn,select=False):
             print()
     
     if select:return lstSelect
-
-

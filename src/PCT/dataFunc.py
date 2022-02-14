@@ -23,6 +23,12 @@ SetupLogger(name=__name__)
 # Hard command
 #-----------------------------------------------------------------------
 def CheckPC():
+    '''
+    Control whether it runs in planet_common environement.
+    
+    out:
+        out (bool): True=planet_comon
+    '''
     from importlib.util import find_spec
     moduleSpec=find_spec('planet_common')
     return (moduleSpec is not None)
@@ -135,7 +141,6 @@ class PCTBucket:
             self.sizeClo=-1
 
     def __str__(self):
-        #ljust(
         strOut='{obj.nameBuck} (exists: {obj.exists})\n'.format(obj=self)
         strOut+='       |   Descr  |   Cloud  |   Local  |\n'
         strOut+='Nb Feat|{obj.nbDescFeat:^10d}|{obj.nbCloFeat:^10d}|{obj.nbLocFeat:^10d}|\n'.format(obj=self)
@@ -224,7 +229,7 @@ class PCTBucket:
     def Create(self):
         '''
         Create the bucket by job system batch. It stores every 
-        information into a txt file 'nameJobFile'
+        information into a file: '_BucketNBatch-x.txt'
 
         out:
             out (bool): return code 0=ok, 1=error
@@ -296,7 +301,8 @@ class PCTBucket:
 
     def Down(self):
         '''
-        Main download function leading to Down_Download or Down_Sync
+        Download scene from online buckets. It controle file size
+        for replacement and size existing ones.
 
         out:
             out (bool): return code 0=ok, 1=error

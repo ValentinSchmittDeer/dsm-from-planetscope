@@ -33,7 +33,7 @@ from PCT import pipelDFunc
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =[]
+__all__ =['ReprojGeom', 'FilterDmProces', 'EpipPreProc', 'SubArgs_Stereo', 'MergeDisparities', 'SubArgs_P2D', 'SubArgs_P2L', 'BRratio', 'AspPc2Txt', 'PdalJson', 'PC_Summary', 'FilterTiles', 'PC2Raster']
 SetupLogger(name=__name__)
 #SubLogger('ERROR', 'Hello')
 
@@ -42,6 +42,14 @@ gdTrans='gdal_translate'
 # Hard command
 #-----------------------------------------------------------------------
 def ReprojGeom(featIn, epsgOut):
+    '''
+    Reproject feature geometry with pyproj.
+
+    featIn (json): input feature with 'properties', 'geometry', etc.
+    epsgOut (str): destination EPSG code
+    out:
+        featIn (json): updated feature
+    '''
     coordIn=np.array(featIn['geometry']['coordinates']).reshape(-1,2)
     coordsLong, coordsLat=coordIn.T
 
@@ -54,24 +62,18 @@ def ReprojGeom(featIn, epsgOut):
 
     return featIn
 
-def GardDEM(pathIn, pathOut):
-    fileIn=rasterio.open(pathIn)
-    
-    if fileIn.dtypes[0]=='float32':
-        typeOut=cv.CV_32F
-    else:
-        SubLogger('CRITICAL', 'Unknown DEM type: %s'% fileIn.dtypes[0])
-    
-    imgIn = cv.Laplacian(fileIn.read(1), typeOut)
-    np.absolute(imgIn, out=imgIn)
-    imgOut = cv.GaussianBlur(imgIn, (5, 5), 0)
-    imgOut*=1/np.amax(imgOut)
-
-    with rasterio.open(pathOut, 'w', **fileIn.profile) as fileOut:
-        fileOut.write(imgOut.astype(np.float32), 1)
-    return 0
-
 def FilterDmProces(lstFeat, coupleCur, pathPC, formTsai, geomAoi):              
+    '''
+    Filter stereo pair dense matching list.
+
+    lstFeat (lst): list of feature (json)
+    coupleCur (json): stereo pair feature
+    pathPC (str): destination path for "_pc.tif"
+    formTsai (str): standard name of Tsai file
+    geomAoi (json): 'geometry' part of the AOI feature
+    out:
+        run (bool): False=skip that stereo pair
+    '''
     # Exists
     if os.path.exists(pathPC): 
         
@@ -365,6 +367,15 @@ def EpipPreProc(lstIn, geomIn, pathDem, prefOut, epip=False, geomAoi=None):
     return 0
 
 def SubArgs_Stereo(lstPath, prefOut, epip=False):
+    '''
+    Create a list of stereo parameters.
+
+    lstPath (list of list): list (2 items) with list (2 items) of image and tsai path
+    prefOut (str): output prefix
+    epip (bool): apply an epipolar transformation
+    out:
+        subArgs (list): list of parameters
+    '''
     # Arguments
     subArgs=['-t', 'nadirpinhole', # mode
              #'--entry-point', '1', # starting point 1:Preprocessing, 2:Disparity, 3:Blend, 4:Sub-pixel Refinement, 5:Outlier Rejection and Hole Filling, 6:Triangulation
@@ -418,7 +429,17 @@ def SubArgs_Stereo(lstPath, prefOut, epip=False):
     return subArgs
 
 def MergeDisparities(prefLeft, prefRight, gdalDock):
-    
+    '''
+    Scope for disparity image merge (and filter). The current version
+    runs with OpenCV functions but it heavy and unstable (for large images).
+    A version with GDAL (C++) may be lighter (not finished).
+
+    prefLeft (str): left disparity prefix
+    prefRight (str): right disparity prefix
+    gdalDock (class): python interface for gdal command
+    out:
+        pathDispLeft (str): left diparity path (updated file)
+    '''
     def Merge_OpenCV(pathLeft, pathRight, imgLeft):
         imgRight= cv.imread(pathRight, cv.IMREAD_LOAD_GDAL)
         if imgRight is None: 
@@ -500,6 +521,14 @@ def MergeDisparities(prefLeft, prefRight, gdalDock):
     return pathDispLeft
  
 def SubArgs_P2D(pathPCIn, epsgCur):
+    '''
+    Create a list of point2dem parameters.
+
+    pathPCIn (str): _PC.tif path
+    epsgCur (str): output EPSG code
+    out:
+        subArgs (list): parameters list
+    '''
     # Arguments
     subArgs=['--transverse-mercator',
             '--nodata-value', '-32767',
@@ -511,6 +540,14 @@ def SubArgs_P2D(pathPCIn, epsgCur):
     return subArgs
 
 def SubArgs_P2L(pathPCIn, epsgCur):
+    '''
+    Create a list of point2las parameters.
+
+    pathPCIn (str): _PC.tif path
+    epsgCur (str): output EPSG code
+    out:
+        subArgs (list): parameters list
+    '''
     # Arguments
     subArgs=['--datum', 'WGS84', 
             '--t_srs', 'EPSG:%s'% str(epsgCur), 
@@ -588,7 +625,7 @@ def AspPc2Txt(pathIn):
 
 def PdalJson(pathObj):
     '''
-    Create PDAL pipeline jsone file
+    Create PDAL pipeline jsone files.
     
     pathObj (obj): PathCur class from VarCur
     out:
@@ -734,6 +771,19 @@ def PdalJson(pathObj):
     return 0
 
 def PC_Summary(lstPath, lstEmpty, lstBoundsCur, nb, pathTxt):
+    '''
+    Print out point cloud summary and write it down. If the file
+    already exists and it is the same, it return a True checkMerged.
+
+    lstPath (list): list of usable point cloud path
+    lstEmpty (list): list of emtpy pont cloud path
+    lstBoundsCur (list): 'coordinates' part of AOI feature
+    nb (int): number of point in total
+    pathTxt (str): point cloud list path
+    out:
+        checkMerged (bool): True=must be merged (again)
+        lstMid (list): middle point coordinates
+    '''
     nbFile=len(lstPath)+len(lstEmpty)
     lstMid=np.round(np.mean(np.array(lstBoundsCur).reshape(2,2), axis=0), -3).astype(int).tolist()
 
@@ -790,6 +840,18 @@ def FilterTiles(lstMid, lstTilePath, pathTemplate, featAoi):
     return code
 
 def PC2Raster(pathIn, pathOut, lstIndex, pathJson, pdalTool):
+    '''
+    Run PDAL command line for rasterisation and merge all outcoming 
+    raster files into 1 final product.
+
+    pathIn (str): point cloud tile path
+    pathOut (str): output DSM path
+    lstIndex (list): list of tile indices value
+    pathJson (str): pipeline json descriptor 
+    pdalTool (class): PDAL python interface
+    out:
+        out (int): cleaning output code 
+    '''
     pathJsonCur='.'.join(pathOut.split('.')[:-1])+'.json'
     dicOri={'origin_x': str(lstIndex[0]*1000),
             'origin_y': str((lstIndex[1]-1)*1000)}
@@ -864,17 +926,6 @@ def PC2Raster(pathIn, pathOut, lstIndex, pathJson, pdalTool):
 
     cmdClean='rm %s'% ' '.join(list(lstPath)+[pathJsonCur,])
     return os.system(cmdClean)
-
-
-def DisplayMat(mat):
-    from PIL import Image
-    print('Matrix (%ix%i, rk=%i):'% (mat.shape[0],mat.shape[1],matrix_rank(mat)))
-    print(np.abs(mat).astype(bool).astype(int))
-    matDisp=(mat==0).astype(int)*255
-    print('Image: White=0; Black=full (±)')
-    imgMat=Image.fromarray(matDisp.astype(float))
-    imgMat.show()
-    sys.exit()
 
 #=======================================================================
 #main

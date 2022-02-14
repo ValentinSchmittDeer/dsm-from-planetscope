@@ -9,6 +9,6 @@ Planet_Common Tools
 #-----------------------------------------------------------------------
 __author__='Valentin Schmitt'
 __version__=1.0
-__all__ =['dataFunc']
+__all__ =['dataFunc', 'metaDFunc', 'pipelDFunc']
 
 

@@ -129,9 +129,8 @@ if __name__ == "__main__":
 
         if not args.b in methodB: raise RuntimeError("-b must be one of %s"% str(methodB))        
 
-        if args.fBH and not args.extMD: 
-            if input("The BH filtering needs extended metadata, do you want to continue (any key stops):"):
-                raise RuntimeError("The BH filtering needs acces to extended metadata")
+        if args.fBH: 
+            args.extMD=True
         
         logger.info("Arguments: " + str(vars(args)))
         #sys.exit()
