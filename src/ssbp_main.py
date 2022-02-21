@@ -70,7 +70,7 @@ if __name__ == "__main__":
         # Block parameters
         parser.add_argument('-b', default='month', help='Block creation mode <month|one> (default: month)')
         parser.add_argument('-extMD', action='store_true', help='Read extended metadata (default: False)')
-        parser.add_argument('-cov', action='store_true', help='Compute a coverage image with the number of scenes (default: False)')
+        parser.add_argument('-cov', action='store_false', help='Compute a coverage image with the number of scenes (default: True)')
         
         # Filter parameters
         parser.add_argument('-fFP', action='store_false', help='Footprint filtering (default: True)')
@@ -267,7 +267,7 @@ if __name__ == "__main__":
             if args.cov: blockFunc.Coverage(args.o, featAoi)
             
             # Update stereo
-            blockFunc.StereoCoupling(args.o, moreComb=True)
+            blockFunc.StereoCoupling(args.o)  #moreComb=True
 
             
 

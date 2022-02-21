@@ -26,7 +26,6 @@ else:
 from OutLib.LoggerFunc import *
 from VarCur import *
 from BlockProc import GeomFunc, DockerLibs
-from PCT import pipelDFunc
 
 #-----------------------------------------------------------------------
 # Hard argument
@@ -684,6 +683,7 @@ def PdalJson(pathObj):
     # e_H [mm] = Intensity + 1000 to avoid over weighting and /0
     # pipeline process uses Intensity as uint16, so not /1000
     strWeight='ScanAngleRank/(Intensity+1000)*%.6f'% (pi/180*1000**2) # w = sig_Z^{-2} = e_Z^{-1} [m]
+    srtRadius=str(gsdOrth*2**0.5/2) # half gsdOrth diagonal (circumcircle of original GSD)
     with open(pathObj.pJsonRast_WA, 'w') as fileOut:
         fileOut.writelines(json.dumps({"pipeline": 
                                         ["PathIn.las",
@@ -699,7 +699,7 @@ def PdalJson(pathObj):
                                             "data_type": "float32",
                                             "output_type": "count",
                                             "dimension": "Z",
-                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "radius": srtRadius,
                                             "resolution": str(gsdDsm),
                                             "nodata": "-32767",
                                             "origin_x": "0",
@@ -715,7 +715,7 @@ def PdalJson(pathObj):
                                             "data_type": "float32",
                                             "output_type": "stdev",
                                             "dimension": "Z",
-                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "radius": srtRadius,
                                             "resolution": str(gsdDsm),
                                             "nodata": "-32767",
                                             "origin_x": "0",
@@ -736,7 +736,7 @@ def PdalJson(pathObj):
                                             "output_type": "mean",
                                             #"power": "0.5",
                                             "dimension": "Intensity",
-                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "radius": srtRadius,
                                             "resolution": str(gsdDsm),
                                             "nodata": "-32767",
                                             "origin_x": "0",
@@ -757,7 +757,7 @@ def PdalJson(pathObj):
                                             "output_type": "mean",
                                             #"power": "0.5",
                                             "dimension": "Z",
-                                            "radius": str(gsdOrth*8**0.5), # 2 times the image GSD fixed by gsdOrth (close to original GSD) 
+                                            "radius": srtRadius,
                                             "resolution": str(gsdDsm),
                                             "nodata": "-32767",
                                             "origin_x": "0",

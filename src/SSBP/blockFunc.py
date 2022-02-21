@@ -125,7 +125,7 @@ class SceneBlocks():
         pathDir= os.path.join(self.dirOut, bName)
         if not os.path.exists(pathDir): os.mkdir(pathDir)
         # Scene Id txt
-        pathOut=os.path.join(self.dirOut, sbName, fileSceneId.format(bName))
+        pathOut=os.path.join(self.dirOut, bName, fileSceneId.format(bName))
         if os.path.exists(pathOut): print('Overwrite %s'% os.path.basename(pathOut))
         with open(pathOut,'w') as fileOut:
             strOut='\n'.join([feat['id']+extSceneIn for feat in self.lstBFeat[iB]])
@@ -264,7 +264,7 @@ class SceneBlocks():
 
             # Feature list
             pathDescip=os.path.join(pathB, fileSelec.format(nameB))
-            if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% nameBFile.format(nameB, 'Search.json'))
+            if not os.path.exists(pathDescip): SubLogger('CRITICAL', '%s descriptor not found'% fileSelec.format(nameB))
             with open(pathDescip) as fileIn:
                 geojsonTxt=json.load(fileIn)
 
@@ -399,7 +399,7 @@ def Coverage(pathIn,  featAoi, lstBName=False):
         objCur=SceneBlocks(pathIn, meth='dir', b=nameB)
           
         geomAoiJson=featAoi['features'][0]['geometry']
-        geomAoi=Polygon(geomAoiJson['coordinates'][0][0])
+        geomAoi=Polygon(np.array(geomAoiJson['coordinates']).reshape(-1,2).tolist())
 
         boundsGeomAoi=geomAoi.bounds
         boundsAoi=[item//imageGsd*imageGsd+k//2*imageGsd for k,item in enumerate(boundsGeomAoi)]

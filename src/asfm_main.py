@@ -78,7 +78,7 @@ if __name__ == "__main__":
         parser.add_argument('-epsg', required=True, help='Current ESPG used by initial ortho')
 
         parser.add_argument('-m', default='pm', help='BA mode rpc|pm (default: pm)')
-        parser.add_argument('-p', default='orthoF', help='Process last step (read, data, orthoI, kp, eo, io, exp, orthoF)')
+        parser.add_argument('-p', default='orthoF', help='Process last step (read, data, orthoI, camI, kp, eo, io, exp, orthoF)')
 
         # Optional arguments
         parser.add_argument('-b',nargs='+', default=[], help='Block name to process (default: False means all)')
@@ -104,7 +104,7 @@ if __name__ == "__main__":
             geomAoi=jsonAoi['features'][0]
 
         if not args.m in ('rpc','pm'): raise RuntimeError("BA mode unknown")
-        lstProcLvl=('read', 'data', 'orthoI', 'kp', 'eo', 'io', 'exp', 'orthoF')
+        lstProcLvl=('read', 'data', 'orthoI', 'camI', 'kp', 'eo', 'io', 'exp', 'orthoF')
         if not args.p in lstProcLvl: raise RuntimeError("Last process step unknown")
         iProc=lstProcLvl.index(args.p)
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             logger.info('# Process data')
 
-            procBar=ProcessStdout(name='Data creation',inputCur=nbFeat)
+            procBar=ProcessStdout(name='Single band data creation',inputCur=nbFeat)
             for j in range(nbFeat):
                 procBar.ViewBar(j)
                 featCur=objBlocks.lstBFeat[0][j]
@@ -192,6 +192,46 @@ if __name__ == "__main__":
                 
 
             if iProc <= lstProcLvl.index('orthoI'): continue
+
+            #---------------------------------------------------------------
+            # Camera creation
+            #---------------------------------------------------------------
+            if args.m=='pm':
+                logger.warning('PM-BA mode')
+                
+                logger.info('# Camera creation')
+                procBar=ProcessStdout(name='PnP per camera',inputCur=nbFeat)
+                
+                for j in range(nbFeat):
+                    procBar.ViewBar(j)
+                    featCur=objBlocks.lstBFeat[0][j]
+                    idImg=featCur['id']
+                    pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
+                    pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
+                    pathCamRough=os.path.join(objPath.pProcData, objPath.nTsai[0].format(idImg))
+                    pathCamOut=os.path.join(objPath.pProcData, objPath.nTsai[1].format(idImg))
+
+                    # PnP, SRS 
+                    if 0: # ASP PnP
+                        raise RuntimeError('ASP PnP not up-to-date, check the DEM (RPCs use alti ?)')
+                        pathRpcNdisto=os.path.join(objPath.pData, objPath.extRpcNdisto.format(idImg))
+                        # ASP no disto RPC
+                        if not os.path.exists(pathRpcNdisto): ASfMFunc.AspPnP_RPCwithoutDisto(idImg, pathRpcIn, pathRpcNdisto)
+                        # ASP cam_gen
+                        if not os.path.exists(pathCamRough): asp.cam_gen(ASfMFunc.AspPnP_SubArgs_Camgen(idImg, pathImgIn, pathRpcNdisto, args.dem, pathCamRough, pattern='grid'))
+                        # PM rough to init
+                        if not os.path.exists(pathCamOut): ASfMFunc.AspPnP_ConvertPM(idImg, pathImgIn, pathCamRough, pathCamOut)
+
+                    else: # OpenCV EPnP
+                        if not os.path.exists(pathCamOut): ASfMFunc.PnP_OCV(idImg, pathRpcIn, pathCamOut)
+
+                        
+                    if args.ortho:
+                        pathOrthoOut=objPath.pOrtho.format(idImg, '-Init-PM')
+                        if not os.path.exists(pathOrthoOut): asp.mapproject(ASfMFunc.SubArgs_Ortho(pathImgIn, pathCamOut, args.dem, pathOrthoOut, args.epsg))
+            else:
+                logger.warning('RPC-BA mode')
+            if iProc <= lstProcLvl.index('camI'): continue
 
             #---------------------------------------------------------------
             # Bundle adjustment series
@@ -296,7 +336,6 @@ if __name__ == "__main__":
             # RPC-BA
             #-----------------------------------------------------------------------
             if args.m=='rpc':
-                logger.warning('RPC-BA mode')
                 #---------------------------------------------------------------
                 # RPC adjust EO
                 #---------------------------------------------------------------
@@ -373,41 +412,6 @@ if __name__ == "__main__":
             # PM-BA
             #-----------------------------------------------------------------------
             elif args.m=='pm':
-                logger.warning('PM-BA mode')
-                #---------------------------------------------------------------
-                # Camera creation
-                #---------------------------------------------------------------
-                logger.info('# Camera creation')
-                procBar=ProcessStdout(name='PnP per camera',inputCur=nbFeat)
-                
-                for j in range(nbFeat):
-                    procBar.ViewBar(j)
-                    featCur=objBlocks.lstBFeat[0][j]
-                    idImg=featCur['id']
-                    pathImgIn=os.path.join(objPath.pProcData, objPath.extFeat1B.format(idImg))
-                    pathRpcIn=os.path.join(objPath.pData, objPath.extRpc.format(idImg))
-                    pathCamRough=os.path.join(objPath.pProcData, objPath.nTsai[0].format(idImg))
-                    pathCamOut=os.path.join(objPath.pProcData, objPath.nTsai[1].format(idImg))
-
-                    # PnP, SRS 
-                    if 0: # ASP PnP
-                        raise RuntimeError('ASP PnP not up-to-date, check the DEM (RPCs use alti ?)')
-                        pathRpcNdisto=os.path.join(objPath.pData, objPath.extRpcNdisto.format(idImg))
-                        # ASP no disto RPC
-                        if not os.path.exists(pathRpcNdisto): ASfMFunc.AspPnP_RPCwithoutDisto(idImg, pathRpcIn, pathRpcNdisto)
-                        # ASP cam_gen
-                        if not os.path.exists(pathCamRough): asp.cam_gen(ASfMFunc.AspPnP_SubArgs_Camgen(idImg, pathImgIn, pathRpcNdisto, args.dem, pathCamRough, pattern='grid'))
-                        # PM rough to init
-                        if not os.path.exists(pathCamOut): ASfMFunc.AspPnP_ConvertPM(idImg, pathImgIn, pathCamRough, pathCamOut)
-
-                    else: # OpenCV EPnP
-                        if not os.path.exists(pathCamOut): ASfMFunc.PnP_OCV(idImg, pathRpcIn, pathCamOut)
-
-                        
-                    if args.ortho:
-                        pathOrthoOut=objPath.pOrtho.format(idImg, '-Init-PM')
-                        if not os.path.exists(pathOrthoOut): asp.mapproject(ASfMFunc.SubArgs_Ortho(pathImgIn, pathCamOut, args.dem, pathOrthoOut, args.epsg))
-                
                 #---------------------------------------------------------------
                 # EO adjustment
                 #---------------------------------------------------------------
