@@ -206,6 +206,9 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             if nbPair: procBar=ProcessStdout(name='Dense maching',inputCur=len(lstIPair))
             
+            # Clean Docker system
+            os.popen('sudo docker container prune --force ; sudo docker volume prune --force')
+
             j=0
             #while j<nbPair//2:
             #j=nbPair//2+1
@@ -218,9 +221,11 @@ if __name__ == "__main__":
 
                 lstId=sorted(objBlocks.lstBCouple[0][j]['properties']['scenes'].split(';'))
                 
-                #logger.info('j: %i'% j)
+                #if not objBlocks.lstBCouple[0][j]['id']==262: 
+                #    j+=1
+                #    continue
+                #logger.info('j: %s'% strJ)
                 #if not input('Ready? (1/0)'): continue
-                #if 0:
                 #---------------------------------------------------------------
                 # Left or Right Ref
                 #---------------------------------------------------------------
@@ -238,7 +243,6 @@ if __name__ == "__main__":
                 # Epipolar images
                 #---------------------------------------------------------------
                 epipMode=True
-                #if 0:
                 if glob(objPath.prefProcDM+'*'): os.system('rm %s*'% objPath.prefProcDM)
                 prepaProc=MSSFunc.EpipPreProc( tupLstPath[0], 
                                             objBlocks.lstBCouple[0][j]['geometry'], 
@@ -352,7 +356,9 @@ if __name__ == "__main__":
                 cmd='rm -r '+objPath.prefProcDM+'*'
                 os.system(cmd)
                 j+=1
-
+            
+            # Clean Docker system /!\ If parallel process, it prunes all existing containers
+            #os.popen('sudo docker container prune --force ; sudo docker volume prune --force')
             #---------------------------------------------------------------
             # Point cloud summary
             #---------------------------------------------------------------

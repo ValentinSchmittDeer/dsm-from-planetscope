@@ -109,8 +109,8 @@ fileCov='{}_Coverage.tif'
 fileBHfTrack='{}_BHfTrack.geojson'
 
 # Orbits
-satAz_Val=(-180, -110, -83, 85, 100, 110, 277, 180)
-satAz_Name=('descending', 'ascending', 'descending', 'ascending', 'descending', 'descending', 'descending', 'descending')
+satAz_Val=(-180, -110, -83, 85, 100, 110, 277, 180, 200, 260)
+satAz_Name=('descending', 'ascending', 'descending', 'ascending', 'descending', 'descending', 'descending', 'descending', 'descending',  'ascending')
 satAz_Tol=10
 
 ## PCT

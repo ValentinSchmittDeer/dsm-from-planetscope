@@ -96,7 +96,7 @@ def FilterDmProces(lstFeat, coupleCur, pathPC, formTsai, geomAoi):
 
     if len(lstSatAz)==2:
         lstSatAzDiff=[[abs(az-azRef)//satAz_Tol for azRef in satAz_Val] for az in lstSatAz]
-        if not all([0 in tup for tup in lstSatAzDiff]): raise RuntimeError('Input satellite azimut not interpreted (stereopair %i): %s (+/-%i)'% (j, str(lstSatAz), satAz_Tol))
+        if not all([0 in tup for tup in lstSatAzDiff]): raise RuntimeError('Input satellite azimut not interpreted (stereopair %i): %s (+/-%i)'% (coupleCur['id'], str(lstSatAz), satAz_Tol))
         setSatOri=set([satAz_Name[tup.index(0)] for tup in lstSatAzDiff])
         
         if not len(setSatOri)==1: return False

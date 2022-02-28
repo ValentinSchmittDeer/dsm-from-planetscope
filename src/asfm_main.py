@@ -319,7 +319,9 @@ if __name__ == "__main__":
                     cmd='rm '+' '.join([' '.join(tupCur) for tupCur in lstPath])
                     os.system(cmd)
                     if os.path.exists(folderSKP): os.system('rm -r %s'% folderSKP)
-                                    
+                    # Clean Docker system /!\ If parallel process, it prunes all existing containers
+                    os.popen('sudo docker container prune --force ; sudo docker volume prune --force')
+
                 print()
                 # Fixed bundle adjustment: Initial residuals
                 asp.parallel_bundle_adjust(subArgs.KP_RPC(objPath.pProcData, 
