@@ -206,8 +206,8 @@ if __name__ == "__main__":
             #---------------------------------------------------------------
             if nbPair: procBar=ProcessStdout(name='Dense maching',inputCur=len(lstIPair))
             
-            # Clean Docker system
-            os.popen('sudo docker container prune --force ; sudo docker volume prune --force')
+            # Clean Docker system /!\ If parallel process, it prunes all existing containers
+            #os.popen('sudo docker container prune --force ; sudo docker volume prune --force')
 
             j=0
             #while j<nbPair//2:
