@@ -4,7 +4,7 @@
 > © Valentin Schmitt (University of Stuttgart, IfP), 2022 - Author and Proprietary    
 > © Planet Labs Inc., 2022 - Proprietary
     
-**Caution: the usage of that algorithm is regulated by coppyright**    
+**Caution: the usage of that algorithm is regulated by coppyrights**    
 **It has been design on Ubuntu and some functions must operate in Planet IT environment**
 
 **Author:** [Valentin Schmitt (Planet intern, University of Stuttgart, IfP)](mailto:schmitt.h.valentin@gmail.com)    
